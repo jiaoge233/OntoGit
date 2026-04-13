@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Probability</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section class="card">
+        <div id="modeNav" class="nav"></div>
+        <h1 id="modeTitle">Probability</h1>
+        <p id="modeDesc" class="desc">只输出百分比概率。</p>
+
+        <label class="label" for="prompt">用户提示词</label>
+        <textarea
+          id="prompt"
+          class="textarea"
+          placeholder="请输入待判别的 JSON 或文本内容。"
+        ></textarea>
+
+        <div class="actions">
+          <button id="submitBtn" class="button">发送</button>
+        </div>
+
+        <p id="status" class="status"></p>
+
+        <label class="label" for="result">模型回复</label>
+        <pre id="result" class="result">这里会显示后端返回的内容。</pre>
+      </section>
+    </main>
+
+    <script>
+      window.APP_MODE = "probability";
+    </script>
+    <script src="../app.js"></script>
+  </body>
+</html>

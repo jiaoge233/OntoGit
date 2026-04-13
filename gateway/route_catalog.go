@@ -1,0 +1,181 @@
+package main
+
+type RouteDoc struct {
+	Name        string `json:"name"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Module      string `json:"module"`
+	Upstream    string `json:"upstream,omitempty"`
+	Auth        string `json:"auth"`
+	Description string `json:"description"`
+}
+
+func gatewayRouteCatalog() []RouteDoc {
+	return []RouteDoc{
+		{
+			Name:        "gateway_root",
+			Method:      "GET",
+			Path:        "/",
+			Module:      "gateway",
+			Auth:        "none",
+			Description: "Gateway root metadata and quick links.",
+		},
+		{
+			Name:        "gateway_health",
+			Method:      "GET",
+			Path:        "/health",
+			Module:      "gateway",
+			Auth:        "none",
+			Description: "Gateway health plus backend health summary.",
+		},
+		{
+			Name:        "gateway_login_page",
+			Method:      "GET",
+			Path:        "/login",
+			Module:      "gateway",
+			Auth:        "none",
+			Description: "Gateway-owned browser login page. Defaults to /ui-dashboard after login.",
+		},
+		{
+			Name:        "gateway_dashboard_page",
+			Method:      "GET",
+			Path:        "/ui-dashboard",
+			Module:      "gateway",
+			Auth:        "browser session or bearer",
+			Description: "Data platform dashboard page served by gateway.",
+		},
+		{
+			Name:        "gateway_dashboard_summary",
+			Method:      "GET",
+			Path:        "/api/dashboard/summary",
+			Module:      "gateway",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Aggregated dashboard data from xiaogugit plus probability backend health.",
+		},
+		{
+			Name:        "gateway_route_catalog",
+			Method:      "GET",
+			Path:        "/api/routes",
+			Module:      "gateway",
+			Auth:        "none",
+			Description: "Unified gateway route catalog for all exposed modules.",
+		},
+		{
+			Name:        "gateway_auth_proxy",
+			Method:      "ANY",
+			Path:        "/auth/*",
+			Module:      "gateway->xiaogugit",
+			Upstream:    "xiaogugit",
+			Auth:        "none for login; cookie/bearer after login",
+			Description: "Authentication endpoints proxied to xiaogugit.",
+		},
+		{
+			Name:        "xiaogugit_proxy",
+			Method:      "ANY",
+			Path:        "/xg/*",
+			Module:      "gateway->xiaogugit",
+			Upstream:    "xiaogugit",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Unified prefixed access to xiaogugit APIs.",
+		},
+		{
+			Name:        "probability_proxy",
+			Method:      "ANY",
+			Path:        "/probability/*",
+			Module:      "gateway->probability",
+			Upstream:    "probability",
+			Auth:        "none by default; can still send bearer if needed",
+			Description: "Unified prefixed access to probability APIs.",
+		},
+		{
+			Name:        "xg_projects",
+			Method:      "GET",
+			Path:        "/xg/projects",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/projects",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "List projects.",
+		},
+		{
+			Name:        "xg_project_timelines",
+			Method:      "GET",
+			Path:        "/xg/timelines/{project_id}",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/timelines/{project_id}",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Read project-level file timelines.",
+		},
+		{
+			Name:        "xg_read_current",
+			Method:      "GET",
+			Path:        "/xg/read/{project_id}/{filename}",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/read/{project_id}/{filename}",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Read current working-copy JSON content.",
+		},
+		{
+			Name:        "xg_write_and_infer",
+			Method:      "POST",
+			Path:        "/xg/write-and-infer",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/write-and-infer",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Write a new version and trigger probability inference.",
+		},
+		{
+			Name:        "xg_official_recommend",
+			Method:      "GET",
+			Path:        "/xg/version-recommend/official",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/version-recommend/official",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Read current official recommendation for one ontology file.",
+		},
+		{
+			Name:        "xg_official_recommend_set",
+			Method:      "POST",
+			Path:        "/xg/version-recommend/official/set",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/version-recommend/official/set",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Set current official recommended version.",
+		},
+		{
+			Name:        "xg_community_recommend",
+			Method:      "GET",
+			Path:        "/xg/version-recommend/community",
+			Module:      "xiaogugit",
+			Upstream:    "xiaogugit:/version-recommend/community",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Read current community recommended version.",
+		},
+		{
+			Name:        "probability_health",
+			Method:      "GET",
+			Path:        "/probability/health",
+			Module:      "probability",
+			Upstream:    "probability:/health",
+			Auth:        "none",
+			Description: "Probability service health endpoint.",
+		},
+		{
+			Name:        "probability_reason",
+			Method:      "POST",
+			Path:        "/probability/api/llm/probability-reason",
+			Module:      "probability",
+			Upstream:    "probability:/api/llm/probability-reason",
+			Auth:        "none",
+			Description: "Run probability + reason LLM inference.",
+		},
+		{
+			Name:        "probability_score_only",
+			Method:      "POST",
+			Path:        "/probability/api/llm/probability",
+			Module:      "probability",
+			Upstream:    "probability:/api/llm/probability",
+			Auth:        "none",
+			Description: "Run probability-only LLM inference.",
+		},
+	}
+}

@@ -1,0 +1,29 @@
+services:
+  xiaogugit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xiaogugit
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      XG_ENV: ${XG_ENV:-development}
+      XG_HOST: 0.0.0.0
+      XG_PORT: ${XG_PORT:-8000}
+    ports:
+      - "${XG_PORT:-8000}:8000"
+    volumes:
+      - ./storage:/app/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,sys,urllib.request; port=os.environ.get('XG_PORT','8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/health'); sys.exit(0)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

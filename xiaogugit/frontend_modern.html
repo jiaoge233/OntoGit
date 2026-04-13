@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>本体Git Neo 面板</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --bg-soft: rgba(12, 23, 41, 0.78);
+      --panel: rgba(14, 26, 48, 0.86);
+      --panel-strong: rgba(16, 31, 57, 0.96);
+      --line: rgba(148, 163, 184, 0.18);
+      --line-strong: rgba(96, 165, 250, 0.28);
+      --text: #e5eefc;
+      --muted: #96a7c2;
+      --brand: #60a5fa;
+      --brand-strong: #3b82f6;
+      --brand-soft: rgba(96, 165, 250, 0.18);
+      --ok: #34d399;
+      --ok-soft: rgba(52, 211, 153, 0.14);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.16);
+      --danger: #f87171;
+      --shadow: 0 24px 70px rgba(2, 6, 23, 0.45);
+      --radius-lg: 24px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 28%),
+        radial-gradient(circle at top right, rgba(52, 211, 153, 0.12), transparent 24%),
+        linear-gradient(180deg, #08111f 0%, #0b1323 45%, #09101b 100%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(180deg, rgba(255,255,255,0.7), transparent 92%);
+    }
+
+    .wrap {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 32px 24px 48px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 32px;
+      border-radius: 28px;
+      margin-bottom: 24px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(16, 31, 57, 0.9) 48%, rgba(14, 165, 233, 0.18) 100%);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      right: -60px;
+      top: -90px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(96, 165, 250, 0.35) 0%, rgba(96, 165, 250, 0.06) 60%, transparent 74%);
+      pointer-events: none;
+    }
+
+    .hero-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(191, 219, 254, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #dbeafe;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .brand-badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #60a5fa;
+      box-shadow: 0 0 16px rgba(96, 165, 250, 0.8);
+    }
+
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      letter-spacing: 0.02em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: #d3e3fb;
+      line-height: 1.75;
+      font-size: 15px;
+    }
+
+    .hero-meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 22px;
+    }
+
+    .meta-chip {
+      padding: 10px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(191, 219, 254, 0.14);
+      background: rgba(10, 20, 38, 0.46);
+      color: #dbeafe;
+      font-size: 13px;
+    }
+
+    .actions {
+      margin-top: 24px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .link-btn, button {
+      border: 1px solid transparent;
+      border-radius: 14px;
+      padding: 11px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s ease;
+      font-weight: 700;
+    }
+
+    .link-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: #eaf2ff;
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(191, 219, 254, 0.14);
+    }
+
+    .link-btn:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.14);
+      border-color: rgba(191, 219, 254, 0.3);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      position: relative;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.55), transparent);
+      opacity: 0.75;
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      color: #f8fbff;
+    }
+
+    .desc {
+      margin: 0 0 16px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .tag.ok {
+      background: var(--ok-soft);
+      color: var(--ok);
+      border-color: rgba(52, 211, 153, 0.2);
+    }
+
+    .tag.dev {
+      background: var(--warn-soft);
+      color: var(--warn);
+      border-color: rgba(251, 191, 36, 0.2);
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #dbe7fa;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 11px 12px;
+      font-size: 14px;
+      color: var(--text);
+      background: rgba(7, 16, 29, 0.82);
+      outline: none;
+      transition: 0.18s ease;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--line-strong);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font-family: Consolas, monospace;
+      line-height: 1.5;
+    }
+
+    button {
+      margin-top: 14px;
+      width: 100%;
+      color: #eff6ff;
+      background: linear-gradient(135deg, var(--brand-strong), var(--brand));
+      box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 28px rgba(37, 99, 235, 0.28);
+    }
+
+    button.secondary {
+      background: linear-gradient(135deg, #0f766e, #14b8a6);
+      box-shadow: 0 12px 26px rgba(20, 184, 166, 0.18);
+    }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(96, 165, 250, 0.12);
+      background: rgba(4, 10, 20, 0.84);
+      color: #dbeafe;
+      overflow: auto;
+      min-height: 110px;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .footer {
+      margin-top: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 720px) {
+      .wrap {
+        padding: 20px 14px 36px;
+      }
+
+      .hero {
+        padding: 24px 20px;
+      }
+
+      .hero h1 {
+        font-size: 28px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-head">
+        <div>
+          <div class="brand-badge">Neo UI</div>
+          <h1>本体Git Neo 面板</h1>
+          <p>这是基于现有功能做的一版独立新风格界面。保留原有写入、读取、日志、Diff、回滚、项目管理和彻底删除能力，只调整视觉表达，不影响旧版页面。</p>
+          <div class="hero-meta">
+            <div class="meta-chip">独立新文件</div>
+            <div class="meta-chip">保留旧版 `/ui`</div>
+            <div class="meta-chip">适配暗色工作流</div>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="link-btn" href="/ui" target="_blank" rel="noreferrer">打开旧版面板</a>
+        <a class="link-btn" href="/ui-visual" target="_blank" rel="noreferrer">打开可视化版本面板</a>
+        <button class="link-btn" type="button" onclick="logout()">退出登录</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">POST /write</span>
+        </div>
+        <h2>写入并提交</h2>
+        <p class="desc">写入一份 JSON 文档并自动提交到对应项目仓库。</p>
+        <label for="write-project">项目 ID</label>
+        <input id="write-project" value="demo">
+        <label for="write-file">文件名</label>
+        <input id="write-file" value="ontology.json">
+        <label for="write-message">提交说明</label>
+        <input id="write-message" value="AI: update ontology">
+        <label for="write-agent">本体名称</label>
+        <input id="write-agent" value="老师">
+        <label for="write-committer">提交者</label>
+        <input id="write-committer" value="张三">
+        <label for="write-basevision">basevision</label>
+        <input id="write-basevision" type="number" min="0" value="0">
+        <label for="write-data">JSON 数据</label>
+        <textarea id="write-data">{
+  "hello": "world"
+}</textarea>
+        <button onclick="writeVersion()">提交版本</button>
+        <pre id="write-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">POST /delete</span>
+        </div>
+        <h2>删除本体</h2>
+        <p class="desc">彻底删除当前本体及其历史版本（会重写 Git 历史，操作不可逆）。</p>
+        <label for="delete-project">项目 ID</label>
+        <input id="delete-project" value="demo">
+        <label for="delete-file">文件名</label>
+        <input id="delete-file" value="ontology.json">
+        <label for="delete-committer">操作人</label>
+        <input id="delete-committer" value="张三">
+        <label for="delete-message">删除说明</label>
+        <input id="delete-message" value="删除本体">
+        <button onclick="deleteOntology()">彻底删除本体</button>
+        <pre id="delete-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /read</span>
+        </div>
+        <h2>读取版本</h2>
+        <p class="desc">读取当前版本，或根据提交 ID 读取历史版本。</p>
+        <label for="read-project">项目 ID</label>
+        <input id="read-project" value="demo">
+        <label for="read-file">文件名</label>
+        <input id="read-file" value="ontology.json">
+        <label for="read-commit">提交 ID（可选）</label>
+        <input id="read-commit" placeholder="留空则读取最新版本">
+        <button class="secondary" onclick="readVersion()">读取内容</button>
+        <pre id="read-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /log</span>
+        </div>
+        <h2>查看日志</h2>
+        <p class="desc">查看某个项目的全部提交历史。</p>
+        <label for="log-project">项目 ID</label>
+        <input id="log-project" value="demo">
+        <button onclick="loadLog()">查看日志</button>
+        <pre id="log-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /diff</span>
+        </div>
+        <h2>版本差异</h2>
+        <p class="desc">比较同一文件在两个提交之间的差异。</p>
+        <label for="diff-project">项目 ID</label>
+        <input id="diff-project" value="demo">
+        <label for="diff-file">文件名</label>
+        <input id="diff-file" value="ontology.json">
+        <label for="diff-base">基础提交 ID</label>
+        <input id="diff-base" placeholder="旧版本 commit id">
+        <label for="diff-target">目标提交 ID</label>
+        <input id="diff-target" placeholder="新版本 commit id">
+        <button onclick="loadDiff()">查看 Diff</button>
+        <pre id="diff-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">POST /rollback</span>
+        </div>
+        <h2>回滚版本</h2>
+        <p class="desc">将指定版本之后的变更做一次安全回滚，生成新的补偿提交。</p>
+        <label for="rollback-project">项目 ID</label>
+        <input id="rollback-project" value="demo">
+        <label for="rollback-commit">目标提交 ID</label>
+        <input id="rollback-commit" placeholder="要恢复到的 commit id">
+        <button onclick="rollbackVersion()">执行回滚</button>
+        <pre id="rollback-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /</span>
+        </div>
+        <h2>服务首页信息</h2>
+        <p class="desc">展示服务名称、运行状态、文档地址和支持的项目状态列表。</p>
+        <button class="secondary" onclick="loadServiceInfo()">获取服务信息</button>
+        <pre id="service-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /health</span>
+        </div>
+        <h2>健康检查</h2>
+        <p class="desc">用于快速检测服务是否正常运行，适合部署检查和联调测试。</p>
+        <button class="secondary" onclick="loadHealth()">检查服务健康状态</button>
+        <pre id="health-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">POST /projects/init</span>
+        </div>
+        <h2>初始化项目</h2>
+        <p class="desc">创建新项目仓库，并写入项目名称、描述、状态等基础信息。</p>
+        <label for="init-project">项目 ID</label>
+        <input id="init-project" value="demo">
+        <label for="init-name">项目名称</label>
+        <input id="init-name" value="演示项目">
+        <label for="init-description">项目描述</label>
+        <textarea id="init-description">这是一个用于演示本体版本管理的本体Git项目。</textarea>
+        <label for="init-status">初始状态</label>
+        <select id="init-status">
+          <option value="开发中" selected>开发中</option>
+          <option value="测试中">测试中</option>
+          <option value="已完成">已完成</option>
+          <option value="已暂停">已暂停</option>
+          <option value="已归档">已归档</option>
+          <option value="已回滚">已回滚</option>
+        </select>
+        <button onclick="initProject()">初始化项目</button>
+        <pre id="init-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /projects</span>
+        </div>
+        <h2>查询项目列表</h2>
+        <p class="desc">查看全部项目的基础信息，适合做项目总览页和检索入口。</p>
+        <button class="secondary" onclick="loadProjects()">获取项目列表</button>
+        <pre id="projects-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /projects/{project_id}</span>
+        </div>
+        <h2>查询项目详情</h2>
+        <p class="desc">查看某个项目的名称、状态、文件数量、提交数量等详细信息。</p>
+        <label for="detail-project">项目 ID</label>
+        <input id="detail-project" value="demo">
+        <button class="secondary" onclick="loadProjectDetail()">查询详情</button>
+        <pre id="detail-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">POST /projects/status</span>
+        </div>
+        <h2>更新项目状态</h2>
+        <p class="desc">将项目状态更新为开发中、测试中、已完成等，用于流程管理展示。</p>
+        <label for="status-project">项目 ID</label>
+        <input id="status-project" value="demo">
+        <label for="status-value">目标状态</label>
+        <select id="status-value">
+          <option value="开发中" selected>开发中</option>
+          <option value="测试中">测试中</option>
+          <option value="已完成">已完成</option>
+          <option value="已暂停">已暂停</option>
+          <option value="已归档">已归档</option>
+          <option value="已回滚">已回滚</option>
+        </select>
+        <label for="status-operator">操作人</label>
+        <input id="status-operator" value="System">
+        <button onclick="updateProjectStatus()">更新状态</button>
+        <pre id="status-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /projects/{project_id}/files</span>
+        </div>
+        <h2>查询文件列表</h2>
+        <p class="desc">查看某个项目仓库中已有的全部文档文件，便于定位和浏览。</p>
+        <label for="files-project">项目 ID</label>
+        <input id="files-project" value="demo">
+        <button class="secondary" onclick="loadProjectFiles()">查看文件列表</button>
+        <pre id="files-output">等待请求...</pre>
+      </article>
+
+      <article class="card">
+        <div class="tag-row">
+          <span class="tag ok">已开放</span>
+          <span class="tag ok">GET /projects/{project_id}/commits/{commit_id}</span>
+        </div>
+        <h2>查询提交详情</h2>
+        <p class="desc">查看某次提交的作者、时间、说明和变更文件，适合做审计展示。</p>
+        <label for="commit-project">项目 ID</label>
+        <input id="commit-project" value="demo">
+        <label for="commit-id">提交 ID</label>
+        <input id="commit-id" placeholder="请输入 commit id">
+        <button class="secondary" onclick="loadCommitDetail()">查询提交详情</button>
+        <pre id="commit-output">等待请求...</pre>
+      </article>
+    </section>
+
+    <div class="footer">
+      访问地址：<strong>/ui-modern</strong> ｜ 旧版入口：<strong>/ui</strong> ｜ API 文档：<strong>/docs</strong>
+    </div>
+  </div>
+
+  <script>
+    function setOutput(id, data) {
+      const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      document.getElementById(id).textContent = text;
+    }
+
+    async function parseResponse(response) {
+      if (response.status === 401) {
+        localStorage.removeItem("xg_access_token");
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        throw new Error("未登录或登录已失效");
+      }
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+
+    function getAccessToken() {
+      return localStorage.getItem("xg_access_token") || "";
+    }
+
+    async function authFetch(url, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const token = getAccessToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      return fetch(url, { ...options, headers });
+    }
+
+    async function logout() {
+      const token = getAccessToken();
+      await authFetch("/auth/logout", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      localStorage.removeItem("xg_access_token");
+      window.location.href = "/login";
+    }
+
+    async function resolveWriteBasevision(projectId, filename, requestedBasevision, shouldAutoResolve) {
+      if (!shouldAutoResolve) return requestedBasevision;
+      if (requestedBasevision > 0) return requestedBasevision;
+      const response = await authFetch(`/versions/${encodeURIComponent(projectId)}?filename=${encodeURIComponent(filename)}`);
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(data.detail || (typeof data === "string" ? data : JSON.stringify(data)));
+      }
+      const latestVersionId = Number(data.latest_version_id || 0);
+      const versions = Array.isArray(data.versions) ? data.versions : [];
+      const latest = versions.find(v => String(v.version_id) === String(latestVersionId));
+      if (latest && latest.is_deleted) return 0;
+      return latestVersionId > 0 ? latestVersionId : 0;
+    }
+
+    async function writeVersion() {
+      try {
+        const projectId = document.getElementById("write-project").value.trim();
+        const filename = document.getElementById("write-file").value.trim();
+        const basevisionRaw = document.getElementById("write-basevision").value.trim();
+        const shouldAutoResolveBasevision = basevisionRaw === "";
+        const inputBasevision = Number(basevisionRaw || 0);
+        const resolvedBasevision = await resolveWriteBasevision(projectId, filename, inputBasevision, shouldAutoResolveBasevision);
+        const payload = {
+          project_id: projectId,
+          filename,
+          message: document.getElementById("write-message").value.trim(),
+          agent_name: document.getElementById("write-agent").value.trim(),
+          committer_name: document.getElementById("write-committer").value.trim(),
+          basevision: resolvedBasevision,
+          data: JSON.parse(document.getElementById("write-data").value)
+        };
+        document.getElementById("write-basevision").value = String(resolvedBasevision);
+        const response = await authFetch("/write-and-infer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        setOutput("write-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("write-output", { error: String(error) });
+      }
+    }
+
+    async function deleteOntology() {
+      try {
+        const payload = {
+          project_id: document.getElementById("delete-project").value.trim(),
+          filename: document.getElementById("delete-file").value.trim(),
+          committer_name: document.getElementById("delete-committer").value.trim() || "System",
+          message: document.getElementById("delete-message").value.trim() || "删除本体",
+          purge_history: true
+        };
+        if (!payload.project_id || !payload.filename) {
+          throw new Error("项目 ID 和文件名不能为空");
+        }
+        if (!window.confirm(`确认彻底删除本体 ${payload.filename} 吗？该操作会重写历史且不可恢复。`)) {
+          setOutput("delete-output", { cancelled: true });
+          return;
+        }
+        const response = await authFetch("/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        setOutput("delete-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("delete-output", { error: String(error) });
+      }
+    }
+
+    async function readVersion() {
+      try {
+        const projectId = encodeURIComponent(document.getElementById("read-project").value.trim());
+        const filename = encodeURIComponent(document.getElementById("read-file").value.trim());
+        const commitId = document.getElementById("read-commit").value.trim();
+        const suffix = commitId ? `?commit_id=${encodeURIComponent(commitId)}` : "";
+        const response = await authFetch(`/read/${projectId}/${filename}${suffix}`);
+        setOutput("read-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("read-output", { error: String(error) });
+      }
+    }
+
+    async function loadLog() {
+      try {
+        const projectId = encodeURIComponent(document.getElementById("log-project").value.trim());
+        const response = await authFetch(`/log/${projectId}`);
+        setOutput("log-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("log-output", { error: String(error) });
+      }
+    }
+
+    async function loadDiff() {
+      try {
+        const params = new URLSearchParams({
+          project_id: document.getElementById("diff-project").value.trim(),
+          filename: document.getElementById("diff-file").value.trim(),
+          base: document.getElementById("diff-base").value.trim(),
+          target: document.getElementById("diff-target").value.trim()
+        });
+        const response = await authFetch(`/diff?${params.toString()}`);
+        setOutput("diff-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("diff-output", { error: String(error) });
+      }
+    }
+
+    async function rollbackVersion() {
+      try {
+        const params = new URLSearchParams({
+          project_id: document.getElementById("rollback-project").value.trim(),
+          commit_id: document.getElementById("rollback-commit").value.trim()
+        });
+        const response = await authFetch(`/rollback?${params.toString()}`, {
+          method: "POST"
+        });
+        setOutput("rollback-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("rollback-output", { error: String(error) });
+      }
+    }
+
+    async function loadServiceInfo() {
+      try {
+        const response = await authFetch("/");
+        setOutput("service-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("service-output", { error: String(error) });
+      }
+    }
+
+    async function loadHealth() {
+      try {
+        const response = await authFetch("/health");
+        setOutput("health-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("health-output", { error: String(error) });
+      }
+    }
+
+    async function initProject() {
+      try {
+        const payload = {
+          project_id: document.getElementById("init-project").value.trim(),
+          name: document.getElementById("init-name").value.trim() || null,
+          description: document.getElementById("init-description").value.trim(),
+          status: document.getElementById("init-status").value
+        };
+        const response = await authFetch("/projects/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        setOutput("init-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("init-output", { error: String(error) });
+      }
+    }
+
+    async function loadProjects() {
+      try {
+        const response = await authFetch("/projects");
+        setOutput("projects-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("projects-output", { error: String(error) });
+      }
+    }
+
+    async function loadProjectDetail() {
+      try {
+        const projectId = encodeURIComponent(document.getElementById("detail-project").value.trim());
+        const response = await authFetch(`/projects/${projectId}`);
+        setOutput("detail-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("detail-output", { error: String(error) });
+      }
+    }
+
+    async function updateProjectStatus() {
+      try {
+        const payload = {
+          project_id: document.getElementById("status-project").value.trim(),
+          status: document.getElementById("status-value").value,
+          operator: document.getElementById("status-operator").value.trim() || "System"
+        };
+        const response = await authFetch("/projects/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        setOutput("status-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("status-output", { error: String(error) });
+      }
+    }
+
+    async function loadProjectFiles() {
+      try {
+        const projectId = encodeURIComponent(document.getElementById("files-project").value.trim());
+        const response = await authFetch(`/projects/${projectId}/files`);
+        setOutput("files-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("files-output", { error: String(error) });
+      }
+    }
+
+    async function loadCommitDetail() {
+      try {
+        const projectId = encodeURIComponent(document.getElementById("commit-project").value.trim());
+        const commitId = encodeURIComponent(document.getElementById("commit-id").value.trim());
+        const response = await authFetch(`/projects/${projectId}/commits/${commitId}`);
+        setOutput("commit-output", await parseResponse(response));
+      } catch (error) {
+        setOutput("commit-output", { error: String(error) });
+      }
+    }
+  </script>
+</body>
+</html>

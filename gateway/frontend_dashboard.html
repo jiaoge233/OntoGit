@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数据中台总览台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08111d;
+      --panel: rgba(14, 24, 38, 0.9);
+      --line: rgba(148, 163, 184, 0.16);
+      --text: #e7eef9;
+      --muted: #98a7be;
+      --brand: #38bdf8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --danger: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 28%),
+        linear-gradient(180deg, #08111d 0%, #0b1320 55%, #060b13 100%);
+    }
+    .page { max-width: 1480px; margin: 0 auto; padding: 24px; }
+    .hero, .panel, .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(14px);
+    }
+    .hero { padding: 28px; margin-bottom: 18px; }
+    .hero-top, .toolbar, .panel-head, .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .hero-top { justify-content: space-between; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05);
+    }
+    h1, h2 { margin: 0; }
+    h1 { margin-top: 12px; font-size: 32px; }
+    p { color: #d4deed; line-height: 1.7; }
+    .actions, .toolbar { margin-top: 16px; }
+    .btn, .link-btn, select {
+      border-radius: 14px;
+      font-size: 14px;
+    }
+    .btn, .link-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 14px;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .btn.primary { background: linear-gradient(135deg, #67e8f9, #38bdf8); color: #042036; border-color: transparent; font-weight: 700; }
+    select { padding: 10px 12px; background: rgba(8, 13, 20, 0.95); color: var(--text); border: 1px solid var(--line); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric { padding: 18px; }
+    .metric-label { font-size: 12px; color: var(--muted); text-transform: uppercase; }
+    .metric-value { margin-top: 10px; font-size: 30px; font-weight: 800; }
+    .metric-desc { margin-top: 8px; font-size: 12px; color: #b8cae4; line-height: 1.6; }
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .grid-2 { grid-template-columns: 1.45fr 1fr; }
+    .grid-3 { grid-template-columns: 1.1fr 1fr 1fr; }
+    .panel { padding: 20px; }
+    .panel-head { justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .subtitle { color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .lane { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+    .lane-card, .list-card, .module-card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(8, 14, 22, 0.84);
+    }
+    .lane-step { font-size: 12px; color: var(--muted); text-transform: uppercase; }
+    .lane-value { margin-top: 8px; font-size: 24px; font-weight: 800; }
+    .lane-desc, .meta { margin-top: 6px; color: #b8cae4; font-size: 12px; line-height: 1.6; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); text-align: left; vertical-align: top; }
+    th { font-size: 12px; color: var(--muted); text-transform: uppercase; }
+    .pill {
+      display: inline-flex;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      margin-right: 6px;
+      margin-bottom: 6px;
+      border: 1px solid transparent;
+    }
+    .pill.ok { color: #dcfce7; background: rgba(52, 211, 153, 0.14); border-color: rgba(52, 211, 153, 0.18); }
+    .pill.warn { color: #fef3c7; background: rgba(251, 191, 36, 0.14); border-color: rgba(251, 191, 36, 0.18); }
+    .pill.danger { color: #ffe4e6; background: rgba(251, 113, 133, 0.14); border-color: rgba(251, 113, 133, 0.18); }
+    .pill.info { color: #dbeafe; background: rgba(56, 189, 248, 0.14); border-color: rgba(56, 189, 248, 0.18); }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .modules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .status { margin-top: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); color: var(--muted); background: rgba(255,255,255,0.04); }
+    .status.ok { color: #d1fae5; background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.2); }
+    .status.error { color: #ffe4e6; background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.2); }
+    .empty { padding: 18px; border-radius: 16px; border: 1px dashed rgba(148, 163, 184, 0.18); color: var(--muted); text-align: center; }
+    @media (max-width: 1260px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid-2, .grid-3, .lane, .modules { grid-template-columns: 1fr; } }
+    @media (max-width: 720px) { .metrics { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 520px) { .metrics { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="badge">Data Platform Dashboard</div>
+          <h1>数据中台总览台</h1>
+          <p>这个页面只负责中台总览展示，不替代现有模块工作台。它聚合版本治理、概率回填、社区热度和官方推荐，用统一视角展示当前闭环状态。</p>
+          <div class="row">
+            <div class="badge" id="hero-projects">项目 0</div>
+            <div class="badge" id="hero-files">本体 0</div>
+            <div class="badge" id="hero-governance">官方覆盖 0%</div>
+            <div class="badge" id="hero-xg-health">XiaoGuGit -</div>
+            <div class="badge" id="hero-probability-health">Probability -</div>
+          </div>
+        </div>
+        <div class="actions">
+          <a class="link-btn" href="/ui">版本治理</a>
+          <a class="link-btn" href="/ui-visual">版本图谱</a>
+          <a class="link-btn" href="/docs">接口文档</a>
+          <button class="btn" onclick="logout()">退出登录</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="badge" id="selected-project-title">当前项目：-</div>
+        <select id="project-select"></select>
+        <button class="btn primary" onclick="refreshDashboard()">刷新总览</button>
+        <button class="btn" onclick="window.location.href='/ui-visual'">进入治理页</button>
+      </div>
+    </section>
+
+    <section class="metrics" id="metrics"></section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>闭环链路</h2>
+            <div class="subtitle">版本库、推理、社区和官方治理的当前状态。</div>
+          </div>
+        </div>
+        <div class="lane" id="pipeline-lane"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>待治理对象</h2>
+            <div class="subtitle">优先看无官方推荐、概率偏低、双轨分歧的本体。</div>
+          </div>
+        </div>
+        <div id="risk-list" class="stack"></div>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>本体治理总览</h2>
+            <div class="subtitle">每个本体的最新版本、官方推荐、社区推荐和 probability。</div>
+          </div>
+        </div>
+        <div id="governance-wrap"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>最近活动</h2>
+            <div class="subtitle">当前项目最近的版本变更和治理结果。</div>
+          </div>
+        </div>
+        <div id="activity-list" class="stack"></div>
+      </div>
+    </section>
+
+    <section class="grid-3">
+      <div class="panel">
+        <div class="panel-head"><div><h2>官方推荐榜</h2><div class="subtitle">当前项目已有官方推荐的本体。</div></div></div>
+        <div id="official-list" class="stack"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>社区热榜</h2><div class="subtitle">按社区分数和星标排序。</div></div></div>
+        <div id="community-list" class="stack"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>模块入口</h2><div class="subtitle">模块前端继续保留，这里只做统一总览。</div></div></div>
+        <div class="modules">
+          <div class="module-card"><strong>版本治理</strong><div class="meta">直接写版本、回滚、设官方推荐。</div><a class="link-btn" href="/ui">打开</a></div>
+          <div class="module-card"><strong>图谱治理</strong><div class="meta">看版本树、悬停预览、双轨节点。</div><a class="link-btn" href="/ui-visual">打开</a></div>
+          <div class="module-card"><strong>接口文档</strong><div class="meta">联调聚合字段和后端 API。</div><a class="link-btn" href="/docs">打开</a></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="status" class="status">正在加载中台数据...</div>
+  </div>
+
+  <script>
+    const state = { projects: [], timelineMap: {}, currentMap: {}, selectedProjectId: "", backends: [] };
+
+    function token() { return localStorage.getItem("xg_access_token") || ""; }
+    async function api(url, options = {}) {
+      const headers = new Headers(options.headers || {});
+      if (token()) headers.set("Authorization", `Bearer ${token()}`);
+      const response = await fetch(url, { ...options, headers });
+      const text = await response.text();
+      let data = text;
+      try { data = JSON.parse(text); } catch (e) {}
+      if (response.status === 401) {
+        localStorage.removeItem("xg_access_token");
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        throw new Error("未登录或登录已失效");
+      }
+      if (!response.ok) throw new Error(data.detail || (typeof data === "string" ? data : JSON.stringify(data)));
+      return data;
+    }
+    async function logout() {
+      await fetch("/auth/logout", { method: "POST", headers: token() ? { Authorization: `Bearer ${token()}` } : {} });
+      localStorage.removeItem("xg_access_token");
+      window.location.href = "/login";
+    }
+    function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m])); }
+    function fmtTime(v) {
+      if (!v) return "-";
+      const d = new Date(String(v).replace(" ", "T"));
+      if (Number.isNaN(d.getTime())) return String(v);
+      return new Intl.DateTimeFormat("zh-CN", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false }).format(d).replace(/\//g, "-");
+    }
+    function setStatus(text, tone = "") {
+      const el = document.getElementById("status");
+      el.className = `status ${tone}`.trim();
+      el.textContent = text;
+    }
+    function parseProbability(v) {
+      const match = String(v ?? "").match(/-?\d+(\.\d+)?/);
+      return match ? Number(match[0]) : null;
+    }
+    function timelines() { return state.timelineMap[state.selectedProjectId] || []; }
+    function currentData(filename) { return state.currentMap[`${state.selectedProjectId}:${filename}`] || {}; }
+    function governanceRows() {
+      return timelines().map((timeline) => {
+        const history = Array.isArray(timeline.history) ? timeline.history : [];
+        const latest = history.find((item) => String(item.version_id) === String(timeline.latest_version_id)) || history[history.length - 1] || null;
+        const official = history.find((item) => item.is_official_recommended) || null;
+        const community = history.find((item) => item.is_community_recommended) || null;
+        const data = currentData(timeline.filename);
+        const probabilityRaw = data?.probability ?? "-";
+        const probabilityValue = parseProbability(probabilityRaw);
+        return {
+          filename: timeline.filename,
+          latest,
+          official,
+          community,
+          probabilityRaw,
+          probabilityValue,
+          diverged: official && community && String(official.version_id) !== String(community.version_id),
+          needsOfficial: !official,
+          lowProbability: probabilityValue !== null && probabilityValue < 80
+        };
+      });
+    }
+    function renderProjectSelect() {
+      const select = document.getElementById("project-select");
+      if (!state.projects.length) {
+        select.innerHTML = `<option value="">暂无项目</option>`;
+        return;
+      }
+      select.innerHTML = state.projects.map((project) => `<option value="${esc(project.project_id)}">${esc(project.project_id)}</option>`).join("");
+      select.value = state.selectedProjectId;
+      select.onchange = async () => {
+        state.selectedProjectId = select.value;
+        await loadSelectedProject();
+      };
+    }
+    function renderMetrics() {
+      const allTimelines = Object.values(state.timelineMap).flat();
+      const totalFiles = allTimelines.length;
+      const totalVersions = allTimelines.reduce((sum, item) => sum + Number(item.version_count || 0), 0);
+      const officialFiles = allTimelines.filter((item) => (item.history || []).some((v) => v.is_official_recommended)).length;
+      const activeFiles = allTimelines.filter((item) => (item.history || []).some((v) => Number(v.stars || 0) > 0)).length;
+      const divergence = allTimelines.filter((item) => {
+        const history = item.history || [];
+        const official = history.find((v) => v.is_official_recommended);
+        const community = history.find((v) => v.is_community_recommended);
+        return official && community && String(official.version_id) !== String(community.version_id);
+      }).length;
+      const coverage = totalFiles ? Math.round((officialFiles / totalFiles) * 100) : 0;
+      document.getElementById("hero-projects").textContent = `项目 ${state.projects.length}`;
+      document.getElementById("hero-files").textContent = `本体 ${totalFiles}`;
+      document.getElementById("hero-governance").textContent = `官方覆盖 ${coverage}%`;
+      const xgHealth = state.backends.find((item) => item.name === "xiaogugit");
+      const probabilityHealth = state.backends.find((item) => item.name === "probability");
+      document.getElementById("hero-xg-health").textContent = `XiaoGuGit ${xgHealth?.status || "-"}`;
+      document.getElementById("hero-probability-health").textContent = `Probability ${probabilityHealth?.status || "-"}`;
+      const metrics = [
+        ["项目数", state.projects.length, "纳入中台总览的项目总数。"],
+        ["本体数", totalFiles, "所有项目下已进入版本治理的本体。"],
+        ["总版本数", totalVersions, "累计版本规模。"],
+        ["官方覆盖", `${coverage}%`, "已有官方推荐的本体覆盖率。"],
+        ["社区活跃", activeFiles, "至少有一个版本获得过星标的文件数。"],
+        ["双轨分歧", divergence, "官方推荐与社区推荐不一致的文件数。"]
+      ];
+      document.getElementById("metrics").innerHTML = metrics.map((item) => `
+        <div class="metric">
+          <div class="metric-label">${item[0]}</div>
+          <div class="metric-value">${item[1]}</div>
+          <div class="metric-desc">${item[2]}</div>
+        </div>
+      `).join("");
+    }
+    function renderPipeline(rows) {
+      const lane = [
+        ["版本库", rows.length, "当前项目已纳入版本治理的本体文件。"],
+        ["推理回填", rows.filter((row) => row.probabilityValue !== null).length, "当前工作区已有 probability 的本体。"],
+        ["社区轨", rows.filter((row) => row.community).length, "已有社区推荐版本的本体。"],
+        ["官方轨", rows.filter((row) => row.official).length, "已有官方推荐版本的本体。"],
+        ["待裁决", rows.filter((row) => row.diverged).length, "官方与社区存在分歧的本体。"]
+      ];
+      document.getElementById("pipeline-lane").innerHTML = lane.map((item) => `
+        <div class="lane-card">
+          <div class="lane-step">${item[0]}</div>
+          <div class="lane-value">${item[1]}</div>
+          <div class="lane-desc">${item[2]}</div>
+        </div>
+      `).join("");
+    }
+    function renderRiskList(rows) {
+      const items = [];
+      rows.forEach((row) => {
+        if (row.needsOfficial) items.push(["warn", `${row.filename} 未设置官方推荐`, `社区版本 ${row.community ? `V${row.community.version_id}` : "暂无"}，建议补齐官方治理动作。`]);
+        if (row.lowProbability) items.push(["danger", `${row.filename} 概率偏低`, `当前 probability 为 ${row.probabilityRaw}，建议复核本体定义。`]);
+        if (row.diverged) items.push(["info", `${row.filename} 双轨分歧`, `官方版本 V${row.official.version_id}，社区版本 V${row.community.version_id}。`]);
+      });
+      document.getElementById("risk-list").innerHTML = items.length ? items.slice(0, 8).map((item) => `
+        <div class="list-card">
+          <div><span class="pill ${item[0]}">${item[0] === "danger" ? "高风险" : item[0] === "warn" ? "待治理" : "观察中"}</span> <strong>${esc(item[1])}</strong></div>
+          <div class="meta">${esc(item[2])}</div>
+        </div>
+      `).join("") : `<div class="empty">当前项目没有待治理告警。</div>`;
+    }
+    function renderGovernance(rows) {
+      const wrap = document.getElementById("governance-wrap");
+      if (!rows.length) {
+        wrap.innerHTML = `<div class="empty">当前项目暂无治理数据。</div>`;
+        return;
+      }
+      wrap.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>本体</th><th>最新</th><th>官方版本</th><th>社区版本</th><th>概率</th><th>状态</th></tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => {
+              const pills = [];
+              if (row.official) pills.push(`<span class="pill ok">官方 V${row.official.version_id}</span>`);
+              else pills.push(`<span class="pill warn">未设官方</span>`);
+              if (row.community) pills.push(`<span class="pill info">社区 V${row.community.version_id}</span>`);
+              if (row.diverged) pills.push(`<span class="pill danger">双轨分歧</span>`);
+              if (row.lowProbability) pills.push(`<span class="pill warn">概率偏低</span>`);
+              return `
+                <tr>
+                  <td><strong>${esc(row.filename)}</strong><div class="meta">${esc(row.latest?.msg || "暂无版本说明")}</div></td>
+                  <td>V${row.latest?.version_id ?? "-"}</td>
+                  <td>${row.official ? `V${row.official.version_id}${row.official.official_reason ? `<div class="meta">${esc(row.official.official_reason)}</div>` : ""}` : "-"}</td>
+                  <td>${row.community ? `V${row.community.version_id} · ${row.community.stars || 0} stars · #${row.community.community_rank ?? 1}` : "-"}</td>
+                  <td>${esc(row.probabilityRaw)}</td>
+                  <td>${pills.join("")}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+    function renderActivities(rows) {
+      const items = rows.flatMap((row) => {
+        const timeline = timelines().find((item) => item.filename === row.filename);
+        return (timeline?.history || []).map((item) => ({
+          filename: row.filename,
+          versionId: item.version_id,
+          message: item.msg || "版本更新",
+          time: item.time,
+          committer: item.committer,
+          flags: `${item.is_official_recommended ? " · 官方推荐" : ""}${item.is_community_recommended ? " · 社区推荐" : ""}`
+        }));
+      }).sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+      document.getElementById("activity-list").innerHTML = items.length ? items.slice(0, 8).map((item) => `
+        <div class="list-card">
+          <strong>${esc(item.filename)} · V${item.versionId}</strong>
+          <div class="meta">${esc(item.message)}<br>${esc(item.committer || "未知")} · ${fmtTime(item.time)}${item.flags}</div>
+        </div>
+      `).join("") : `<div class="empty">当前项目暂无最近活动。</div>`;
+    }
+    function renderRecommendationLists(rows) {
+      const officialRows = rows.filter((row) => row.official);
+      const communityRows = rows.filter((row) => row.community).sort((a, b) => Number(b.community?.community_score ?? b.community?.stars ?? 0) - Number(a.community?.community_score ?? a.community?.stars ?? 0));
+      document.getElementById("official-list").innerHTML = officialRows.length ? officialRows.map((row) => `
+        <div class="list-card">
+          <strong>${esc(row.filename)} · V${row.official.version_id}</strong>
+          <div class="meta">${row.official.official_reason ? `${esc(row.official.official_reason)}<br>` : ""}${esc(row.official.official_operator || "System")} · ${fmtTime(row.official.official_at)}</div>
+        </div>
+      `).join("") : `<div class="empty">当前项目还没有官方推荐版本。</div>`;
+      document.getElementById("community-list").innerHTML = communityRows.length ? communityRows.map((row) => `
+        <div class="list-card">
+          <strong>${esc(row.filename)} · V${row.community.version_id}</strong>
+          <div class="meta">${row.community.stars || 0} stars · 社区分数 ${row.community.community_score ?? row.community.stars ?? 0} · 排名 #${row.community.community_rank ?? 1}</div>
+        </div>
+      `).join("") : `<div class="empty">当前项目还没有社区热榜数据。</div>`;
+    }
+    async function loadDashboardSummary() {
+      const summary = await api("/api/dashboard/summary");
+      state.backends = Array.isArray(summary.backends) ? summary.backends : [];
+      state.projects = Array.isArray(summary.projects) ? summary.projects : [];
+      state.timelineMap = {};
+      state.currentMap = {};
+      for (const projectData of Array.isArray(summary.data) ? summary.data : []) {
+        const projectId = projectData.project_id || "";
+        if (!projectId) continue;
+        state.timelineMap[projectId] = Array.isArray(projectData.timelines) ? projectData.timelines : [];
+        const currentFiles = projectData.current_files || {};
+        for (const [filename, data] of Object.entries(currentFiles)) {
+          state.currentMap[`${projectId}:${filename}`] = data;
+        }
+      }
+      if (!state.selectedProjectId || !state.projects.some((item) => item.project_id === state.selectedProjectId)) {
+        state.selectedProjectId = state.projects[0]?.project_id || "";
+      }
+      document.getElementById("selected-project-title").textContent = `当前项目：${state.selectedProjectId || "-"}`;
+      renderProjectSelect();
+      renderMetrics();
+    }
+    async function loadSelectedProject() {
+      document.getElementById("selected-project-title").textContent = `当前项目：${state.selectedProjectId || "-"}`;
+      const rows = governanceRows();
+      renderPipeline(rows);
+      renderRiskList(rows);
+      renderGovernance(rows);
+      renderActivities(rows);
+      renderRecommendationLists(rows);
+    }
+    async function refreshDashboard() {
+      try {
+        setStatus("正在刷新中台总览...");
+        await loadDashboardSummary();
+        await loadSelectedProject();
+        setStatus(`中台总览已刷新，当前项目：${state.selectedProjectId || "-"}`, "ok");
+      } catch (error) {
+        setStatus(`中台总览刷新失败：${error.message || error}`, "error");
+      }
+    }
+    document.addEventListener("DOMContentLoaded", async () => {
+      await refreshDashboard();
+    });
+  </script>
+</body>
+</html>

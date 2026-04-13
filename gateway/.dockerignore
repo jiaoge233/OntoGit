@@ -1,0 +1,8 @@
+.git
+.gitignore
+.gocache
+.gotelemetry
+gateway.exe
+gateway.exe~
+*.log
+*.tmp

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>本体Git 登录</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: rgba(13, 20, 36, 0.88);
+      --panel-strong: rgba(18, 28, 48, 0.96);
+      --text: #e8eefc;
+      --muted: #8da0c5;
+      --line: rgba(139, 157, 195, 0.18);
+      --brand: #5ea0ff;
+      --brand-2: #9ad7ff;
+      --danger: #ff7d8f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(94, 160, 255, 0.22), transparent 32%),
+        radial-gradient(circle at 80% 18%, rgba(154, 215, 255, 0.18), transparent 28%),
+        linear-gradient(135deg, #090d18, #0b1020 48%, #11192e);
+    }
+
+    .shell {
+      width: min(1100px, 100%);
+      display: grid;
+      grid-template-columns: minmax(420px, 1.25fr) minmax(340px, 420px);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      overflow: hidden;
+      background: rgba(8, 12, 22, 0.7);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.45);
+    }
+
+    .intro {
+      padding: 44px;
+      background:
+        linear-gradient(160deg, rgba(94, 160, 255, 0.16), rgba(11, 16, 32, 0.06) 58%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .showcase-card {
+      width: min(100%, 560px);
+      border: 1px solid rgba(94, 160, 255, 0.18);
+      border-radius: 28px;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(12, 19, 33, 0.88)),
+        rgba(255, 255, 255, 0.02);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 22px 60px rgba(3, 8, 18, 0.32);
+    }
+
+    .showcase-top {
+      padding: 28px 30px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--brand-2);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      box-shadow: 0 0 20px rgba(94, 160, 255, 0.4);
+    }
+
+    .showcase-top h1 {
+      margin: 18px 0 10px;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.08;
+    }
+
+    .lead {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.8;
+      color: var(--muted);
+    }
+
+    .showcase-pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .showcase-pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(94, 160, 255, 0.2);
+      background: rgba(94, 160, 255, 0.1);
+      color: #d9e9ff;
+      font-size: 12px;
+      letter-spacing: 0.03em;
+    }
+
+    .showcase-body {
+      padding: 22px 30px 28px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .showcase-block {
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .showcase-block-title {
+      font-size: 12px;
+      color: var(--brand-2);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+    }
+
+    .showcase-block p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric-value {
+      margin-top: 6px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .panel {
+      padding: 36px 30px;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .panel h2 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    .panel p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    form { display: grid; gap: 14px; }
+
+    label {
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel-strong);
+      color: var(--text);
+      padding: 13px 14px;
+      font-size: 15px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: rgba(94, 160, 255, 0.55);
+      box-shadow: 0 0 0 3px rgba(94, 160, 255, 0.16);
+    }
+
+    button {
+      margin-top: 6px;
+      border: none;
+      border-radius: 14px;
+      padding: 14px 16px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #08101f;
+      background: linear-gradient(135deg, var(--brand-2), var(--brand));
+      box-shadow: 0 18px 30px rgba(94, 160, 255, 0.22);
+    }
+
+    .hint {
+      margin-top: 18px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .error {
+      margin-top: 12px;
+      min-height: 20px;
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    @media (max-width: 920px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        border-left: none;
+        border-top: 1px solid var(--line);
+      }
+
+      .intro {
+        padding: 28px 22px;
+      }
+
+      .metric-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="intro">
+      <article class="showcase-card">
+        <div class="showcase-top">
+          <div class="eyebrow">XiaoGuGit Access</div>
+          <h1>本体Git 平台展示</h1>
+          <p class="lead">面向知识对象版本治理的工作台，支持版本树可视化、项目全局总览、重点版本识别与受控访问。</p>
+          <div class="showcase-pill-row">
+            <span class="showcase-pill">数据基础设施</span>
+            <span class="showcase-pill">世界知识结构化</span>
+            <span class="showcase-pill">全民共建</span>
+          </div>
+        </div>
+        <div class="showcase-body">
+          <div class="showcase-block">
+            <div class="showcase-block-title">平台定位</div>
+            <p>不是单一页面工具，而是支撑知识对象持续演进、重点识别和项目级治理的版本基础设施。</p>
+          </div>
+          <div class="showcase-block">
+            <div class="showcase-block-title">核心能力</div>
+            <p>覆盖单文件版本树、项目全局总览、Stars 机制、差异对比、版本回溯和 Token 访问控制。</p>
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <div class="metric-label">Access Scope</div>
+              <div class="metric-value">全站鉴权</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Auth Mode</div>
+              <div class="metric-value">Bearer Token</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Project Mode</div>
+              <div class="metric-value">版本治理</div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>账号登录</h2>
+      <p>输入系统配置的账号后进入工作台。登录成功后会自动跳转到可视化页面，并在当前浏览器保存访问令牌。</p>
+      <form id="login-form">
+        <label>
+          用户名
+          <input id="username" name="username" autocomplete="username" placeholder="请输入用户名">
+        </label>
+        <label>
+          密码
+          <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码">
+        </label>
+        <button type="submit">进入系统</button>
+      </form>
+      <div id="login-error" class="error"></div>
+      <div class="hint">
+        页面不预填账号密码。登录成功后将保存访问令牌，并统一用于后续页面与接口调用。
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const nextPath = new URLSearchParams(window.location.search).get("next") || "/ui-visual";
+    const form = document.getElementById("login-form");
+    const errorEl = document.getElementById("login-error");
+
+    function storeToken(token) {
+      if (token) localStorage.setItem("xg_access_token", token);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorEl.textContent = "";
+
+      const payload = {
+        username: document.getElementById("username").value.trim(),
+        password: document.getElementById("password").value
+      };
+
+      try {
+        const response = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "登录失败");
+        }
+        storeToken(data.access_token);
+        window.location.href = nextPath || data.redirect_to || "/ui-visual";
+      } catch (error) {
+        errorEl.textContent = error.message || "登录失败";
+      }
+    });
+  </script>
+</body>
+</html>
