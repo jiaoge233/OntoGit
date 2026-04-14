@@ -1,1 +1,10 @@
 files/
+agent/.env
+gateway/.env
+xiaogugit/.env
+
+__pycache__/
+*.py[cod]
+gateway/.gocache/
+gateway/gateway.exe
+gateway/gateway.exe~

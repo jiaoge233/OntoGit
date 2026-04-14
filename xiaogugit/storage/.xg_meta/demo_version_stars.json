@@ -2,5 +2,8 @@
     "student.json": {
         "3": 1,
         "2": 2
+    },
+    "school.json": {
+        "2": 1
     }
 }

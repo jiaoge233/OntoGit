@@ -15,6 +15,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -24,6 +26,9 @@ var dashboardHTML []byte
 
 //go:embed frontend_login.html
 var loginHTML []byte
+
+//go:embed frontend_agent.html
+var agentHTML []byte
 
 type Config struct {
 	Addr           string
@@ -76,6 +81,13 @@ type DashboardSummary struct {
 	Data      []DashboardProjectData `json:"data"`
 }
 
+type AgentQueryRequest struct {
+	Question   string `json:"question"`
+	ProjectID  string `json:"project_id"`
+	Filename   string `json:"filename"`
+	IncludeRaw bool   `json:"include_raw"`
+}
+
 func main() {
 	cfg := loadConfig()
 	globalConfig = cfg
@@ -94,9 +106,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg))
 	mux.HandleFunc("/ui-dashboard", dashboardHandler())
+	mux.HandleFunc("/ui-agent", agentPageHandler())
 	mux.HandleFunc("/login", loginHandler())
 	mux.HandleFunc("/api/routes", routesHandler())
 	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler(cfg))
+	mux.HandleFunc("/api/agent/query", agentQueryHandler(cfg))
 	mux.Handle("/auth/", xiaoGuGitProxy)
 	mux.Handle("/xg/", withStripPrefix("/xg", xiaoGuGitProxy))
 	mux.Handle("/probability/", withStripPrefix("/probability", newReverseProxy(probabilityURL)))
@@ -118,18 +132,70 @@ func main() {
 }
 
 func loadConfig() Config {
+	values := buildMergedEnv()
 	return Config{
-		Addr:           getenv("GATEWAY_ADDR", ":8080"),
-		XiaoGuGitURL:   strings.TrimRight(getenv("GATEWAY_XIAOGUGIT_URL", "http://127.0.0.1:8000"), "/"),
-		ProbabilityURL: strings.TrimRight(getenv("GATEWAY_PROBABILITY_URL", "http://127.0.0.1:5000"), "/"),
-		ServiceAPIKey:  strings.TrimSpace(os.Getenv("GATEWAY_SERVICE_API_KEY")),
-		XGAuthSecret:   strings.TrimSpace(getenv("GATEWAY_XG_AUTH_SECRET", getenv("XG_AUTH_SECRET", "xiaogugit-auth-secret"))),
-		XGAuthUsername: strings.TrimSpace(getenv("GATEWAY_XG_AUTH_USERNAME", getenv("XG_AUTH_USERNAME", "mogong"))),
+		Addr:           getValue(values, "GATEWAY_ADDR", ":8080"),
+		XiaoGuGitURL:   strings.TrimRight(getValue(values, "GATEWAY_XIAOGUGIT_URL", "http://127.0.0.1:8000"), "/"),
+		ProbabilityURL: strings.TrimRight(getValue(values, "GATEWAY_PROBABILITY_URL", "http://127.0.0.1:5000"), "/"),
+		ServiceAPIKey:  strings.TrimSpace(values["GATEWAY_SERVICE_API_KEY"]),
+		XGAuthSecret:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_SECRET", getValue(values, "XG_AUTH_SECRET", "xiaogugit-auth-secret"))),
+		XGAuthUsername: strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_USERNAME", getValue(values, "XG_AUTH_USERNAME", "mogong"))),
 	}
 }
 
 func getenv(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func buildMergedEnv() map[string]string {
+	values := map[string]string{}
+	for _, path := range []string{
+		filepath.Join(".", ".env"),
+		filepath.Join(".", ".env.local"),
+	} {
+		for key, value := range readEnvFile(path) {
+			values[key] = value
+		}
+	}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+func readEnvFile(path string) map[string]string {
+	values := map[string]string{}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return values
+	}
+	for _, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if key != "" {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+func getValue(values map[string]string, key, fallback string) string {
+	value := strings.TrimSpace(values[key])
 	if value == "" {
 		return fallback
 	}
@@ -149,8 +215,10 @@ func rootHandler(cfg Config) http.HandlerFunc {
 			"examples": map[string]string{
 				"login":              "/login?next=/ui-dashboard",
 				"dashboard_api":      "/api/dashboard/summary",
+				"agent_api":          "/api/agent/query",
 				"service_call":       "curl -H \"X-API-Key: <key>\" /api/dashboard/summary",
 				"dashboard":          "/ui-dashboard",
+				"agent":              "/ui-agent",
 				"xiaogugit_health":   "/xg/health",
 				"probability_health": "/probability/health",
 				"probability_reason": "/probability/api/llm/probability-reason",
@@ -193,6 +261,14 @@ func loginHandler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(loginHTML)
+	}
+}
+
+func agentPageHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(agentHTML)
 	}
 }
 
@@ -281,6 +357,47 @@ func dashboardSummaryHandler(cfg Config) http.HandlerFunc {
 	}
 }
 
+func agentQueryHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
+				"detail": "method not allowed",
+			})
+			return
+		}
+
+		var payload AgentQueryRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"detail": "invalid request body",
+				"error":  err.Error(),
+			})
+			return
+		}
+
+		payload.Question = strings.TrimSpace(payload.Question)
+		payload.ProjectID = strings.TrimSpace(payload.ProjectID)
+		payload.Filename = strings.TrimSpace(payload.Filename)
+		if payload.Question == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"detail": "question is required",
+			})
+			return
+		}
+
+		result, err := runAgentQuery(r.Context(), cfg, payload)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"detail": "agent query failed",
+				"error":  err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
 func healthHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -306,6 +423,89 @@ func healthHandler(cfg Config) http.HandlerFunc {
 			Backends:  backends,
 		})
 	}
+}
+
+func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (map[string]any, error) {
+	baseDir, err := executableDir()
+	if err != nil {
+		return nil, err
+	}
+
+	scriptPath := filepath.Join(baseDir, "..", "agent", "run_git_query_agent.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		return nil, fmt.Errorf("agent script not found: %w", err)
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	args := []string{
+		scriptPath,
+		payload.Question,
+		"--base-url", publicGatewayBaseURL(cfg),
+	}
+	if payload.ProjectID != "" {
+		args = append(args, "--project-id", payload.ProjectID)
+	}
+	if payload.Filename != "" {
+		args = append(args, "--filename", payload.Filename)
+	}
+	if strings.TrimSpace(cfg.ServiceAPIKey) != "" {
+		args = append(args, "--api-key", cfg.ServiceAPIKey)
+	}
+	if payload.IncludeRaw {
+		args = append(args, "--include-raw")
+	}
+
+	cmd := execCommandContext(runCtx, "python", args...)
+	cmd.Dir = filepath.Join(baseDir, "..", "agent")
+	cmd.Env = append(os.Environ(),
+		"PYTHONIOENCODING=utf-8",
+		"PYTHONUTF8=1",
+	)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errText := strings.TrimSpace(stderr.String())
+		if errText == "" {
+			errText = err.Error()
+		}
+		return nil, fmt.Errorf("%s", errText)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout.String()), &result); err != nil {
+		return nil, fmt.Errorf("invalid agent output: %w", err)
+	}
+	return result, nil
+}
+
+var execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, args...)
+}
+
+func executableDir() (string, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(executablePath), nil
+}
+
+func publicGatewayBaseURL(cfg Config) string {
+	addr := strings.TrimSpace(cfg.Addr)
+	if addr == "" {
+		addr = ":8080"
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://127.0.0.1" + addr
+	}
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return strings.TrimRight(addr, "/")
+	}
+	return "http://" + strings.TrimRight(addr, "/")
 }
 
 func checkBackend(ctx context.Context, name, targetURL string) HealthStatus {

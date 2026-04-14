@@ -1,10 +1,19 @@
 import json
+import logging
 import os
 import re
 import subprocess
 from datetime import datetime
 
 import git
+
+try:
+    import redis
+except Exception:  # pragma: no cover - optional dependency fallback
+    redis = None
+
+
+logger = logging.getLogger("xiaogugit.manager")
 
 
 class XiaoGuGitManager:
@@ -20,11 +29,473 @@ class XiaoGuGitManager:
     VERSION_META_OBJECT = "XG-ObjectName"
     VERSION_META_COMMITTER = "XG-CommitterName"
 
-    def __init__(self, root_dir=None):
+    def __init__(
+        self,
+        root_dir=None,
+        redis_enabled=False,
+        redis_host="127.0.0.1",
+        redis_port=6379,
+        redis_password="",
+        redis_db=0,
+        redis_key_prefix="xg",
+        redis_socket_timeout=1.5,
+    ):
         self.root_dir = os.path.abspath(root_dir or "./storage")
         os.makedirs(self.root_dir, exist_ok=True)
         self._stars_dir = os.path.join(self.root_dir, self.STARS_DIRNAME)
         os.makedirs(self._stars_dir, exist_ok=True)
+        self._redis_key_prefix = (redis_key_prefix or "xg").strip() or "xg"
+        self._redis = None
+        if redis_enabled and redis is not None:
+            try:
+                self._redis = redis.Redis(
+                    host=redis_host,
+                    port=int(redis_port),
+                    password=redis_password or None,
+                    db=int(redis_db),
+                    decode_responses=True,
+                    socket_timeout=float(redis_socket_timeout),
+                    socket_connect_timeout=float(redis_socket_timeout),
+                )
+                self._redis.ping()
+                logger.info(
+                    "Redis cache enabled for XiaoGuGit at %s:%s/%s",
+                    redis_host,
+                    redis_port,
+                    redis_db,
+                )
+            except Exception as exc:
+                logger.warning("Redis unavailable, falling back to file/Git only: %s", exc)
+                self._redis = None
+
+    def _redis_call(self, callback, default=None):
+        if self._redis is None:
+            return default
+        try:
+            return callback(self._redis)
+        except Exception as exc:
+            logger.warning("Redis operation failed, falling back to current implementation: %s", exc)
+            return default
+
+    # Redis key design for official recommendation:
+    # - key: {prefix}:official:{project_id}:{filename}
+    # - type: HASH
+    # - fields: version_id, reason, operator, updated_at
+    # - ttl: no TTL. Official recommendation is governance state and should persist
+    #   until an explicit set/clear action updates it.
+    def _redis_official_key(self, project_id, filename):
+        safe_filename = self._validate_filename(filename)
+        return f"{self._redis_key_prefix}:official:{self._validate_project_id(project_id)}:{safe_filename}"
+
+    # Redis key design for community ranking:
+    # - key: {prefix}:community:versions:{project_id}:{filename}
+    # - type: ZSET
+    # - member: version_id
+    # - score: stars
+    # - ttl: no TTL. Scores are updated by write/star/unstar and used as the
+    #   primary read model for community recommendation queries.
+    def _redis_community_versions_key(self, project_id, filename):
+        safe_filename = self._validate_filename(filename)
+        return f"{self._redis_key_prefix}:community:versions:{self._validate_project_id(project_id)}:{safe_filename}"
+
+    # Redis key design for project-level community leaderboard:
+    # - key: {prefix}:community:leaderboard:{project_id}
+    # - type: ZSET
+    # - member: filename
+    # - score: current top stars for that file
+    # - ttl: no TTL. Rebuilt on writes/star updates to avoid repeated full scans.
+    def _redis_community_leaderboard_key(self, project_id):
+        return f"{self._redis_key_prefix}:community:leaderboard:{self._validate_project_id(project_id)}"
+
+    # Redis key design for cached version summary:
+    # - key: {prefix}:version:summary:{project_id}:{filename}:{version_id}
+    # - type: STRING(JSON)
+    # - value: compact version detail used by official/community recommendation APIs
+    # - ttl: no TTL. Version snapshots are immutable, and governance/star fields are
+    #   refreshed explicitly after related writes.
+    def _redis_version_summary_key(self, project_id, filename, version_id):
+        safe_filename = self._validate_filename(filename)
+        return (
+            f"{self._redis_key_prefix}:version:summary:"
+            f"{self._validate_project_id(project_id)}:{safe_filename}:{int(version_id)}"
+        )
+
+    # Redis key design for ontology exact lookup:
+    # - key: {prefix}:ontology:lookup:{project_id}
+    # - type: HASH
+    # - field: normalized ontology token or filename stem
+    # - value: filename
+    # - ttl: no TTL. Refreshed explicitly after file writes/deletes.
+    def _redis_ontology_lookup_key(self, project_id):
+        return f"{self._redis_key_prefix}:ontology:lookup:{self._validate_project_id(project_id)}"
+
+    # Redis key design for ontology candidate catalog:
+    # - key: {prefix}:ontology:catalog:{project_id}
+    # - type: HASH
+    # - field: filename
+    # - value: JSON(candidate summary)
+    # - ttl: no TTL. Used to avoid filesystem scans for ontology resolution.
+    def _redis_ontology_catalog_key(self, project_id):
+        return f"{self._redis_key_prefix}:ontology:catalog:{self._validate_project_id(project_id)}"
+
+    # Redis key design for ontology prefix lookup:
+    # - key: {prefix}:ontology:prefix:{project_id}:{prefix_token}
+    # - type: SET
+    # - member: filename
+    # - ttl: no TTL. Supports prefix-style fuzzy lookup without scanning files.
+    def _redis_ontology_prefix_key(self, project_id, prefix_token):
+        return (
+            f"{self._redis_key_prefix}:ontology:prefix:"
+            f"{self._validate_project_id(project_id)}:{prefix_token}"
+        )
+
+    # Redis key design for ontology prefix registry:
+    # - key: {prefix}:ontology:prefix_registry:{project_id}
+    # - type: SET
+    # - member: prefix lookup key name
+    # - ttl: no TTL. Lets refresh logic clean old prefix keys precisely.
+    def _redis_ontology_prefix_registry_key(self, project_id):
+        return f"{self._redis_key_prefix}:ontology:prefix_registry:{self._validate_project_id(project_id)}"
+
+    def _normalize_ontology_lookup(self, value):
+        normalized = str(value or "").strip().lower()
+        if normalized.endswith(".json"):
+            normalized = normalized[:-5]
+        return "".join(ch for ch in normalized if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+
+    def _build_ontology_candidate(self, project_id, filename):
+        safe_filename = self._validate_filename(filename)
+        filename_stem = os.path.splitext(os.path.basename(safe_filename))[0]
+        ontology_name = ""
+        try:
+            payload = self.read_version(project_id, safe_filename)
+            if isinstance(payload, dict):
+                ontology_name = str(payload.get("name", "")).strip()
+        except Exception:
+            ontology_name = ""
+        aliases = []
+        for raw in [safe_filename, filename_stem, ontology_name]:
+            token = self._normalize_ontology_lookup(raw)
+            if token and token not in aliases:
+                aliases.append(token)
+        return {
+            "filename": safe_filename,
+            "filename_stem": filename_stem,
+            "ontology_name": ontology_name,
+            "aliases": aliases,
+        }
+
+    def _collect_project_ontology_candidates(self, project_id):
+        candidates = []
+        for filename in self._list_repo_files(project_id):
+            try:
+                candidates.append(self._build_ontology_candidate(project_id, filename))
+            except Exception:
+                continue
+        return candidates
+
+    def _refresh_project_ontology_index(self, project_id):
+        if self._redis is None:
+            return
+
+        try:
+            candidates = self._collect_project_ontology_candidates(project_id)
+        except Exception as exc:
+            logger.warning("Failed to collect ontology candidates for %s: %s", project_id, exc)
+            return
+
+        lookup_key = self._redis_ontology_lookup_key(project_id)
+        catalog_key = self._redis_ontology_catalog_key(project_id)
+        registry_key = self._redis_ontology_prefix_registry_key(project_id)
+
+        alias_to_files = {}
+        prefix_to_files = {}
+        for candidate in candidates:
+            filename = candidate["filename"]
+            for alias in candidate.get("aliases", []):
+                alias_to_files.setdefault(alias, set()).add(filename)
+                for index in range(1, len(alias) + 1):
+                    prefix = alias[:index]
+                    prefix_to_files.setdefault(prefix, set()).add(filename)
+
+        def _write(client):
+            pipeline = client.pipeline()
+            old_prefix_keys = client.smembers(registry_key)
+            if old_prefix_keys:
+                pipeline.delete(*list(old_prefix_keys))
+            pipeline.delete(registry_key)
+            pipeline.delete(lookup_key)
+            pipeline.delete(catalog_key)
+
+            for candidate in candidates:
+                pipeline.hset(
+                    catalog_key,
+                    candidate["filename"],
+                    json.dumps(candidate, ensure_ascii=False),
+                )
+
+            for alias, filenames in alias_to_files.items():
+                if len(filenames) == 1:
+                    pipeline.hset(lookup_key, alias, list(filenames)[0])
+
+            for prefix, filenames in prefix_to_files.items():
+                prefix_key = self._redis_ontology_prefix_key(project_id, prefix)
+                pipeline.sadd(registry_key, prefix_key)
+                if filenames:
+                    pipeline.sadd(prefix_key, *sorted(filenames))
+
+            pipeline.execute()
+
+        self._redis_call(_write)
+
+    def _get_cached_ontology_candidate(self, project_id, filename):
+        def _read(client):
+            return client.hget(self._redis_ontology_catalog_key(project_id), self._validate_filename(filename))
+
+        payload = self._redis_call(_read)
+        if not payload:
+            return None
+        try:
+            return json.loads(payload)
+        except Exception:
+            return None
+
+    def _score_ontology_candidate(self, query_token, candidate):
+        aliases = candidate.get("aliases", [])
+        ontology_name = self._normalize_ontology_lookup(candidate.get("ontology_name", ""))
+        filename_stem = self._normalize_ontology_lookup(candidate.get("filename_stem", ""))
+        if query_token == ontology_name:
+            return 300
+        if query_token == filename_stem:
+            return 280
+        if query_token in aliases:
+            return 260
+        if ontology_name.startswith(query_token):
+            return 220
+        if filename_stem.startswith(query_token):
+            return 200
+        if any(alias.startswith(query_token) for alias in aliases):
+            return 180
+        joined = " ".join(
+            filter(
+                None,
+                [
+                    self._normalize_ontology_lookup(candidate.get("ontology_name", "")),
+                    self._normalize_ontology_lookup(candidate.get("filename_stem", "")),
+                ],
+            )
+        )
+        if query_token and query_token in joined:
+            return 120
+        return 0
+
+    def resolve_ontology_query(self, project_id, query):
+        normalized_query = self._normalize_ontology_lookup(query)
+        if not normalized_query:
+            raise ValueError("query 不能为空")
+
+        cached_candidates = []
+        exact_filename = self._redis_call(
+            lambda client: client.hget(self._redis_ontology_lookup_key(project_id), normalized_query)
+        )
+        if exact_filename:
+            candidate = self._get_cached_ontology_candidate(project_id, exact_filename)
+            if candidate:
+                return {
+                    "project_id": self._validate_project_id(project_id),
+                    "query": str(query).strip(),
+                    "normalized_query": normalized_query,
+                    "matched_by": "redis_exact",
+                    "filename": candidate["filename"],
+                    "candidate": candidate,
+                    "candidates": [candidate],
+                }
+
+        prefix_filenames = self._redis_call(
+            lambda client: sorted(client.smembers(self._redis_ontology_prefix_key(project_id, normalized_query))),
+            default=[],
+        )
+        for filename in prefix_filenames:
+            candidate = self._get_cached_ontology_candidate(project_id, filename)
+            if candidate:
+                cached_candidates.append(candidate)
+
+        if not cached_candidates:
+            catalog_payload = self._redis_call(
+                lambda client: client.hgetall(self._redis_ontology_catalog_key(project_id)),
+                default={},
+            )
+            if not catalog_payload and self._redis is not None:
+                self._refresh_project_ontology_index(project_id)
+                catalog_payload = self._redis_call(
+                    lambda client: client.hgetall(self._redis_ontology_catalog_key(project_id)),
+                    default={},
+                )
+            if catalog_payload:
+                for raw in catalog_payload.values():
+                    try:
+                        cached_candidates.append(json.loads(raw))
+                    except Exception:
+                        continue
+
+        candidates = cached_candidates
+        matched_by = "redis_fuzzy"
+        if not candidates:
+            candidates = self._collect_project_ontology_candidates(project_id)
+            matched_by = "fallback_scan"
+
+        scored = []
+        for candidate in candidates:
+            score = self._score_ontology_candidate(normalized_query, candidate)
+            if score > 0:
+                scored.append((score, candidate))
+
+        if not scored:
+            raise FileNotFoundError(f"未找到与 {query} 匹配的本体")
+
+        scored.sort(
+            key=lambda item: (
+                int(item[0]),
+                len(item[1].get("ontology_name", "") or ""),
+                item[1]["filename"],
+            ),
+            reverse=True,
+        )
+        top_score = scored[0][0]
+        top_candidates = [candidate for score, candidate in scored if score == top_score]
+        if len(top_candidates) > 1:
+            raise ValueError(
+                "存在多个匹配本体: " + ", ".join(f"{item['filename']}({item.get('ontology_name') or 'unknown'})" for item in top_candidates)
+            )
+
+        return {
+            "project_id": self._validate_project_id(project_id),
+            "query": str(query).strip(),
+            "normalized_query": normalized_query,
+            "matched_by": matched_by,
+            "filename": top_candidates[0]["filename"],
+            "candidate": top_candidates[0],
+            "candidates": top_candidates,
+        }
+
+    def _build_version_summary(self, version):
+        return {
+            "id": version["commit_id"],
+            "msg": version["message"],
+            "version_id": version["version_id"],
+            "filename": version["filename"],
+            "object_name": version["object_name"],
+            "committer": version["committer"],
+            "time": version["time"],
+            "changed_files": [],
+            "parent_version_ids": version["parent_version_ids"],
+            "primary_parent_version_id": version["primary_parent_version_id"],
+            "basevision": version["basevision"],
+            "currvision": version["currvision"],
+            "stars": version["stars"],
+            "is_deleted": version["is_deleted"],
+            "child_version_ids": version["child_version_ids"],
+            "is_root": version["is_root"],
+            "is_latest": version["is_latest"],
+            "track_tags": version.get("track_tags", ["community"]),
+            "is_official_recommended": bool(version.get("is_official_recommended", False)),
+            "official_status": version.get("official_status", "none"),
+            "official_reason": version.get("official_reason", ""),
+            "official_operator": version.get("official_operator", ""),
+            "official_at": version.get("official_at", ""),
+            "is_highest_star": bool(version.get("is_highest_star", False)),
+            "is_community_recommended": bool(version.get("is_community_recommended", False)),
+            "community_score": int(version.get("community_score", version["stars"])),
+            "community_rank": version.get("community_rank"),
+        }
+
+    def _cache_official_entry(self, project_id, filename, entry):
+        if not entry:
+            self._redis_call(lambda client: client.delete(self._redis_official_key(project_id, filename)))
+            return
+
+        def _write(client):
+            client.hset(
+                self._redis_official_key(project_id, filename),
+                mapping={
+                    "version_id": int(entry["version_id"]),
+                    "reason": entry.get("reason", ""),
+                    "operator": entry.get("operator", ""),
+                    "updated_at": entry.get("updated_at", ""),
+                },
+            )
+
+        self._redis_call(_write)
+
+    def _get_cached_official_entry(self, project_id, filename):
+        def _read(client):
+            return client.hgetall(self._redis_official_key(project_id, filename))
+
+        cached = self._redis_call(_read)
+        if not cached:
+            return None
+        try:
+            return {
+                "version_id": int(cached["version_id"]),
+                "reason": str(cached.get("reason", "")),
+                "operator": str(cached.get("operator", "")),
+                "updated_at": str(cached.get("updated_at", "")),
+            }
+        except Exception:
+            return None
+
+    def _cache_version_tree(self, project_id, filename, tree):
+        if self._redis is None:
+            return
+
+        safe_filename = self._validate_filename(filename)
+        versions_key = self._redis_community_versions_key(project_id, safe_filename)
+        leaderboard_key = self._redis_community_leaderboard_key(project_id)
+        current_file_exists = os.path.exists(os.path.join(self._project_path(project_id), safe_filename))
+
+        def _write(client):
+            pipeline = client.pipeline()
+            pipeline.delete(versions_key)
+            for version in tree["versions"]:
+                pipeline.set(
+                    self._redis_version_summary_key(project_id, safe_filename, version["version_id"]),
+                    json.dumps(self._build_version_summary(version), ensure_ascii=False),
+                )
+                pipeline.zadd(versions_key, {str(int(version["version_id"])): int(version.get("stars", 0))})
+
+            if tree["versions"] and current_file_exists:
+                top_version = max(
+                    tree["versions"],
+                    key=lambda item: (int(item.get("stars", 0)), int(item["version_id"])),
+                )
+                pipeline.zadd(leaderboard_key, {safe_filename: int(top_version.get("stars", 0))})
+            else:
+                pipeline.zrem(leaderboard_key, safe_filename)
+            pipeline.execute()
+
+        self._redis_call(_write)
+
+    def _get_cached_version_summary(self, project_id, filename, version_id):
+        def _read(client):
+            return client.get(self._redis_version_summary_key(project_id, filename, version_id))
+
+        payload = self._redis_call(_read)
+        if not payload:
+            return None
+        try:
+            return json.loads(payload)
+        except Exception:
+            return None
+
+    def _refresh_file_cache(self, project_id, filename):
+        if self._redis is None:
+            return
+        try:
+            tree = self.get_file_version_tree(project_id, filename)
+        except Exception as exc:
+            logger.warning("Failed to refresh Redis file cache for %s/%s: %s", project_id, filename, exc)
+            return
+        self._cache_version_tree(project_id, filename, tree)
 
     def _now(self):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -456,13 +927,16 @@ class XiaoGuGitManager:
         else:
             return {"status": "no_change"}
 
-        return {
+        result = {
             "status": "success",
             "commit_id": commit.hexsha,
             "version_id": next_version_id,
             "basevision": normalized_basevision,
             "currvision": next_version_id,
         }
+        self._refresh_file_cache(project_id, safe_filename)
+        self._refresh_project_ontology_index(project_id)
+        return result
 
     def delete_version(self, project_id, filename, message, committer_name, agent_name=None):
         safe_filename = self._validate_filename(filename)
@@ -503,7 +977,7 @@ class XiaoGuGitManager:
             full_message,
             author=git.Actor(committer_name, f"{committer_name}@local"),
         )
-        return {
+        result = {
             "status": "success",
             "action": "deleted",
             "filename": safe_filename,
@@ -512,6 +986,9 @@ class XiaoGuGitManager:
             "basevision": basevision,
             "currvision": next_version_id,
         }
+        self._refresh_file_cache(project_id, safe_filename)
+        self._refresh_project_ontology_index(project_id)
+        return result
 
     def purge_file_history(self, project_id, filename):
         safe_filename = self._validate_filename(filename)
@@ -946,12 +1423,24 @@ class XiaoGuGitManager:
 
     def get_official_recommended_version(self, project_id, filename):
         safe_filename = self._validate_filename(filename)
+        official_entry = self._get_cached_official_entry(project_id, safe_filename)
+        if official_entry:
+            summary = self._get_cached_version_summary(project_id, safe_filename, official_entry["version_id"])
+            if summary:
+                return {
+                    "track": "official",
+                    "source": "configured",
+                    "filename": safe_filename,
+                    "recommended_version_id": int(official_entry["version_id"]),
+                    "version": summary,
+                }
         tree = self.get_file_version_tree(project_id, safe_filename)
         versions = tree["versions"]
         if not versions:
             raise FileNotFoundError(f"文件 {safe_filename} 不存在历史版本")
 
         official_entry = self._get_official_recommendation_entry(self._load_meta(project_id), safe_filename)
+        self._cache_official_entry(project_id, safe_filename, official_entry)
         configured_version_id = official_entry.get("version_id") if official_entry else None
 
         source = "configured"
@@ -1014,6 +1503,9 @@ class XiaoGuGitManager:
             )
             commit_id = commit.hexsha
 
+        self._cache_official_entry(project_id, safe_filename, official_map[safe_filename])
+        self._refresh_file_cache(project_id, safe_filename)
+
         return {
             "status": "success",
             "commit_id": commit_id,
@@ -1065,6 +1557,9 @@ class XiaoGuGitManager:
             )
             commit_id = commit.hexsha
 
+        self._cache_official_entry(project_id, safe_filename, None)
+        self._refresh_file_cache(project_id, safe_filename)
+
         return {
             "status": "success",
             "commit_id": commit_id,
@@ -1094,11 +1589,32 @@ class XiaoGuGitManager:
 
     def get_community_recommended_version(self, project_id, filename):
         safe_filename = self._validate_filename(filename)
+        cached_top = self._redis_call(
+            lambda client: client.zrevrange(
+                self._redis_community_versions_key(project_id, safe_filename),
+                0,
+                0,
+                withscores=True,
+            ),
+            default=[],
+        )
+        if cached_top:
+            version_id = int(cached_top[0][0])
+            summary = self._get_cached_version_summary(project_id, safe_filename, version_id)
+            if summary:
+                return {
+                    "track": "community",
+                    "filename": safe_filename,
+                    "recommended_version_id": version_id,
+                    "stars": int(summary.get("stars", int(cached_top[0][1]))),
+                    "version": summary,
+                }
         tree = self.get_file_version_tree(project_id, safe_filename)
         versions = tree["versions"]
         if not versions:
             raise FileNotFoundError(f"文件 {safe_filename} 不存在历史版本")
 
+        self._cache_version_tree(project_id, safe_filename, tree)
         version = max(
             versions,
             key=lambda item: (int(item.get("stars", 0)), int(item["version_id"])),
@@ -1114,11 +1630,35 @@ class XiaoGuGitManager:
 
     def get_community_recommendation_history(self, project_id, filename):
         safe_filename = self._validate_filename(filename)
+        cached_versions = self._redis_call(
+            lambda client: client.zrevrange(
+                self._redis_community_versions_key(project_id, safe_filename),
+                0,
+                -1,
+                withscores=False,
+            ),
+            default=None,
+        )
+        if cached_versions:
+            cached_history = []
+            for version_id in cached_versions:
+                summary = self._get_cached_version_summary(project_id, safe_filename, int(version_id))
+                if summary is None:
+                    cached_history = []
+                    break
+                cached_history.append(summary)
+            if cached_history:
+                return {
+                    "track": "community",
+                    "filename": safe_filename,
+                    "history": cached_history,
+                }
         tree = self.get_file_version_tree(project_id, safe_filename)
         versions = tree["versions"]
         if not versions:
             raise FileNotFoundError(f"文件 {safe_filename} 不存在历史版本")
 
+        self._cache_version_tree(project_id, safe_filename, tree)
         ranked_versions = sorted(
             versions,
             key=lambda item: (int(item.get("community_score", item.get("stars", 0))), int(item["version_id"])),
@@ -1134,6 +1674,29 @@ class XiaoGuGitManager:
         }
 
     def get_community_leaderboard(self, project_id):
+        leaderboard_members = self._redis_call(
+            lambda client: client.zrevrange(
+                self._redis_community_leaderboard_key(project_id),
+                0,
+                -1,
+                withscores=False,
+            ),
+            default=None,
+        )
+        if leaderboard_members:
+            leaderboard = []
+            for filename in leaderboard_members:
+                try:
+                    leaderboard.append(self.get_community_recommended_version(project_id, filename))
+                except FileNotFoundError:
+                    continue
+            if leaderboard:
+                return {
+                    "track": "community",
+                    "project_id": self._validate_project_id(project_id),
+                    "leaderboard": leaderboard,
+                }
+
         leaderboard = []
         for filename in self._list_repo_files(project_id):
             try:
@@ -1169,6 +1732,7 @@ class XiaoGuGitManager:
         file_stars = stars_map.setdefault(safe_filename, {})
         file_stars[version_key] = int(file_stars.get(version_key, 0)) + normalized_increment
         self._save_stars(project_id, stars_map)
+        self._refresh_file_cache(project_id, safe_filename)
 
         detail = self.get_version_detail(project_id, version["version_id"], safe_filename)
         return {
@@ -1201,6 +1765,7 @@ class XiaoGuGitManager:
             file_stars[version_key] = next_stars
 
         self._save_stars(project_id, stars_map)
+        self._refresh_file_cache(project_id, safe_filename)
         detail = self.get_version_detail(project_id, version["version_id"], safe_filename)
         return {
             "status": "success",

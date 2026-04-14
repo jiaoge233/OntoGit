@@ -31,7 +31,16 @@ app = FastAPI(
     redoc_url=settings.redoc_url,
     openapi_url=settings.openapi_url,
 )
-xg = XiaoGuGitManager(root_dir=settings.storage_root)
+xg = XiaoGuGitManager(
+    root_dir=settings.storage_root,
+    redis_enabled=settings.redis_enabled,
+    redis_host=settings.redis_host,
+    redis_port=settings.redis_port,
+    redis_password=settings.redis_password,
+    redis_db=settings.redis_db,
+    redis_key_prefix=settings.redis_key_prefix,
+    redis_socket_timeout=settings.redis_socket_timeout,
+)
 inference_client = DangGuInferenceClient(
     inference_url=settings.inference_url,
     timeout=settings.inference_timeout,
@@ -355,6 +364,14 @@ async def update_project_status(req: ProjectStatusReq):
 async def list_project_files(project_id: str):
     try:
         return {"files": xg.list_files(project_id)}
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@app.get("/ontology-resolve")
+async def ontology_resolve(project_id: str, query: str):
+    try:
+        return xg.resolve_ontology_query(project_id, query)
     except Exception as exc:
         _handle_error(exc)
 

@@ -45,12 +45,28 @@ func gatewayRouteCatalog() []RouteDoc {
 			Description: "Data platform dashboard page served by gateway.",
 		},
 		{
+			Name:        "gateway_agent_page",
+			Method:      "GET",
+			Path:        "/ui-agent",
+			Module:      "gateway",
+			Auth:        "browser session or bearer",
+			Description: "Interactive agent console page served by gateway.",
+		},
+		{
 			Name:        "gateway_dashboard_summary",
 			Method:      "GET",
 			Path:        "/api/dashboard/summary",
 			Module:      "gateway",
 			Auth:        "browser session, bearer, or X-API-Key",
 			Description: "Aggregated dashboard data from xiaogugit plus probability backend health.",
+		},
+		{
+			Name:        "gateway_agent_query",
+			Method:      "POST",
+			Path:        "/api/agent/query",
+			Module:      "gateway",
+			Auth:        "browser session, bearer, or X-API-Key",
+			Description: "Run the Git query agent through gateway and return planner/tool/final answer output.",
 		},
 		{
 			Name:        "gateway_route_catalog",

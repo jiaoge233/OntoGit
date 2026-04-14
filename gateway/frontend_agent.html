@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0f18;
+      --panel: #101726;
+      --panel-2: #0c1320;
+      --border: #243247;
+      --border-strong: #3b5a85;
+      --text: #f4f8ff;
+      --muted: #8ca2c3;
+      --dim: #6780a5;
+      --brand: #4f8cff;
+      --brand-2: #36c7ff;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --err: #ef4444;
+      --shadow: 0 18px 60px rgba(2, 8, 18, 0.42);
+      --radius: 16px;
+      --header-h: 64px;
+      --sidebar-w: 340px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background:
+        radial-gradient(circle at top left, rgba(79, 140, 255, 0.14), transparent 28%),
+        radial-gradient(circle at top right, rgba(54, 199, 255, 0.12), transparent 30%),
+        linear-gradient(180deg, #08101a 0%, #070b12 100%);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    .app-header {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(9, 14, 24, 0.78);
+      backdrop-filter: blur(14px);
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .brand-title::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      box-shadow: 0 0 16px rgba(79, 140, 255, 0.48);
+    }
+
+    .brand-subtitle {
+      padding-left: 24px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(79, 140, 255, 0.24);
+      background: rgba(79, 140, 255, 0.08);
+      color: #d7e5ff;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .nav-link {
+      color: #dce9ff;
+      text-decoration: none;
+      border: 1px solid var(--border);
+      background: rgba(14, 21, 34, 0.9);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 12px;
+    }
+
+    .app-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+    }
+
+    .sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      border-right: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(15, 23, 36, 0.96), rgba(10, 15, 24, 0.96));
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(18, 24, 38, 0.95), rgba(11, 17, 28, 0.95));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      padding: 14px 16px 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .panel-body {
+      padding: 14px 16px 16px;
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .info-item,
+    .tool-card {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(52, 80, 124, 0.74);
+      background: rgba(8, 12, 19, 0.82);
+    }
+
+    .info-item strong,
+    .tool-name {
+      display: block;
+      margin-bottom: 4px;
+      color: #e7f0ff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .info-item span,
+    .tool-desc {
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 12px;
+    }
+
+    .tool-schema {
+      margin-top: 8px;
+      color: #8fb0db;
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .main-view {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 18px 20px;
+      border-radius: 20px;
+      border: 1px solid rgba(79, 140, 255, 0.24);
+      background:
+        linear-gradient(135deg, rgba(79, 140, 255, 0.16), rgba(54, 199, 255, 0.08)),
+        rgba(13, 20, 31, 0.92);
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.75;
+      max-width: 980px;
+    }
+
+    .workspace {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(340px, 420px) minmax(500px, 1fr);
+      gap: 16px;
+    }
+
+    .query-panel,
+    .result-panel {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #070b12;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      transition: 0.2s ease;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 1px var(--brand), 0 0 18px rgba(79, 140, 255, 0.16);
+    }
+
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+      line-height: 1.65;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .btn {
+      border: 1px solid var(--border-strong);
+      background: linear-gradient(180deg, #1b2a42, #162236);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      transition: 0.2s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: #4b77bd;
+    }
+
+    .btn.primary {
+      background: linear-gradient(180deg, #3479ff, #235fdb);
+      border-color: #3f7dff;
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+      transform: none;
+    }
+
+    .status-line {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(79, 140, 255, 0.18);
+      background: rgba(79, 140, 255, 0.08);
+      color: #cfe0ff;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .status-line.error {
+      border-color: rgba(239, 68, 68, 0.22);
+      background: rgba(239, 68, 68, 0.08);
+      color: #ffd4d4;
+    }
+
+    .status-line.ok {
+      border-color: rgba(16, 185, 129, 0.22);
+      background: rgba(16, 185, 129, 0.08);
+      color: #d8fff2;
+    }
+
+    .chain-stage-wrap {
+      padding: 16px;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .stage {
+      position: relative;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(13, 20, 31, 0.94), rgba(10, 16, 26, 0.9));
+      min-height: 200px;
+    }
+
+    .stage.active {
+      border-color: rgba(79, 140, 255, 0.4);
+      box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.16), 0 0 30px rgba(79, 140, 255, 0.08);
+    }
+
+    .stage.success {
+      border-color: rgba(16, 185, 129, 0.24);
+    }
+
+    .stage.pending {
+      opacity: 0.72;
+    }
+
+    .stage.error {
+      border-color: rgba(239, 68, 68, 0.24);
+    }
+
+    .stage-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .stage-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .stage-chip {
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 11px;
+      color: #cfe0ff;
+      border: 1px solid rgba(79, 140, 255, 0.18);
+      background: rgba(79, 140, 255, 0.08);
+    }
+
+    pre,
+    .answer-block {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .answer-block {
+      color: #ebf3ff;
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.75;
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 14px;
+      padding: 0 16px 16px;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .result-box {
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: rgba(8, 12, 19, 0.82);
+      padding: 14px;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .result-box h3 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .evidence-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .evidence-item {
+      border-radius: 12px;
+      border: 1px solid rgba(52, 80, 124, 0.75);
+      background: rgba(12, 18, 30, 0.76);
+      padding: 10px 12px;
+    }
+
+    .evidence-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: #d8e8ff;
+    }
+
+    .evidence-item span {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .footer-note {
+      margin-top: auto;
+      padding: 0 16px 16px;
+      color: var(--dim);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 1200px) {
+      .workspace { grid-template-columns: 1fr; }
+      .result-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .app-body { flex-direction: column; }
+      .sidebar {
+        width: 100%;
+        min-width: 0;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .main-view { padding: 14px; }
+      .chain-stage-wrap { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-title">Agent Console</div>
+      <div class="brand-subtitle">Natural Language -> Planner -> Tool -> Answer</div>
+    </div>
+    <div class="header-actions">
+      <div class="chip">DMXAPI Planner</div>
+      <div class="chip">Gateway Tool Calls</div>
+      <div class="chip">Redis-Backed Recommendation Reads</div>
+      <a class="nav-link" href="/ui-dashboard">返回中台总览</a>
+      <a class="nav-link" href="/ui-visual">返回版本图谱</a>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <aside class="sidebar">
+      <section class="panel">
+        <div class="panel-header">当前能力</div>
+        <div class="panel-body stack">
+          <div class="info-item">
+            <strong>查询方式</strong>
+            <span>页面会把自然语言问题提交给 Gateway，再由 Gateway 调用 Python Agent。Agent 先让 LLM 规划 tool，再调用受控工具查询版本库，最后生成中文回答。</span>
+          </div>
+          <div class="info-item">
+            <strong>当前已接通的 tools</strong>
+            <span>社区推荐版本查询、官方推荐版本查询。社区推荐路径会优先走 Redis 索引，Redis 不可用时回退到原始版本树实现。</span>
+          </div>
+          <div class="info-item">
+            <strong>执行边界</strong>
+            <span>当前 Agent 是只读查询，不会改 Git 版本、不提交治理动作，也不会直接执行任意 shell。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">工具注册表</div>
+        <div class="panel-body stack">
+          <div class="tool-card">
+            <div class="tool-name">get_community_top_version</div>
+            <div class="tool-desc">查询某个本体文件当前社区星标最高的版本。</div>
+            <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">get_official_recommendation</div>
+            <div class="tool-desc">查询某个本体文件当前官方推荐的版本。</div>
+            <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">链路说明</div>
+        <div class="panel-body stack">
+          <div class="info-item">
+            <strong>1. Request</strong>
+            <span>输入自然语言问题，并提供默认的 project_id 与 filename 作为上下文。</span>
+          </div>
+          <div class="info-item">
+            <strong>2. Planner</strong>
+            <span>DMXAPI 负责从当前 tools 中选出最合适的一个，并补齐入参。</span>
+          </div>
+          <div class="info-item">
+            <strong>3. Tool</strong>
+            <span>本地 Python tool 通过 Gateway 查询版本库接口；推荐相关接口优先命中 Redis。</span>
+          </div>
+          <div class="info-item">
+            <strong>4. Answer</strong>
+            <span>LLM 基于结构化 tool 结果生成中文结论，并把关键证据一起展示出来。</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main-view">
+      <section class="hero panel">
+        <h1>Agent 查询台</h1>
+        <p>这个页面挂在 Gateway 下，走真实的 Agent 执行链路。你可以直接在这里提问，例如“student.json 当前社区星标最高的版本是谁？”或“student.json 当前官方推荐版本是谁？”，页面会展示 Planner、Tool Result 和最终答案。</p>
+      </section>
+
+      <section class="workspace">
+        <div class="query-panel panel">
+          <div class="panel-header">自然语言请求</div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div>
+                <label for="projectId">项目 ID</label>
+                <input id="projectId" value="demo">
+              </div>
+              <div>
+                <label for="filename">本体文件（可选）</label>
+                <input id="filename" value="" placeholder="留空时按本体对象名解析，例如 school / 学校">
+              </div>
+            </div>
+            <label for="questionInput">问题</label>
+            <textarea id="questionInput">学校当前社区星标最高的版本是谁？</textarea>
+            <div class="btn-row">
+              <button class="btn primary" id="runBtn">执行 Agent</button>
+              <button class="btn" type="button" data-question="学校当前社区星标最高的版本是谁？">社区推荐</button>
+              <button class="btn" type="button" data-question="学校当前官方推荐版本是谁？">官方推荐</button>
+            </div>
+            <div class="status-line" id="statusLine">等待请求。当前页面会直接调用 /api/agent/query。</div>
+          </div>
+          <div class="footer-note">
+            当前接口由 Gateway 进程托管。Gateway 会调用本地 Python Agent，再通过同一个 Gateway 访问 xiaogugit 工具接口。
+          </div>
+        </div>
+
+        <div class="result-panel panel">
+          <div class="panel-header">执行轨迹</div>
+          <div class="chain-stage-wrap">
+            <section class="stage" id="requestStage">
+              <div class="stage-header">
+                <div class="stage-title">1. Request</div>
+                <div class="stage-chip">Input</div>
+              </div>
+              <pre id="requestContent">等待执行...</pre>
+            </section>
+
+            <section class="stage pending" id="plannerStage">
+              <div class="stage-header">
+                <div class="stage-title">2. Planner</div>
+                <div class="stage-chip">DMXAPI</div>
+              </div>
+              <pre id="plannerContent">等待执行...</pre>
+            </section>
+
+            <section class="stage pending" id="toolStage">
+              <div class="stage-header">
+                <div class="stage-title">3. Tool Result</div>
+                <div class="stage-chip">Gateway / XG</div>
+              </div>
+              <pre id="toolContent">等待执行...</pre>
+            </section>
+
+            <section class="stage pending" id="answerStage">
+              <div class="stage-header">
+                <div class="stage-title">4. Final Answer</div>
+                <div class="stage-chip">Response</div>
+              </div>
+              <div class="answer-block" id="answerContent">等待执行...</div>
+            </section>
+          </div>
+
+          <div class="result-grid">
+            <section class="result-box">
+              <h3>结构化结果</h3>
+              <pre id="jsonOutput">等待执行...</pre>
+            </section>
+            <section class="result-box">
+              <h3>证据摘要</h3>
+              <div class="evidence-list" id="evidenceList">
+                <div class="evidence-item">
+                  <strong>状态</strong>
+                  <span>等待执行 Agent。</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const statusLine = document.getElementById("statusLine");
+    const runBtn = document.getElementById("runBtn");
+    const projectIdInput = document.getElementById("projectId");
+    const filenameInput = document.getElementById("filename");
+    const questionInput = document.getElementById("questionInput");
+    const requestContent = document.getElementById("requestContent");
+    const plannerContent = document.getElementById("plannerContent");
+    const toolContent = document.getElementById("toolContent");
+    const answerContent = document.getElementById("answerContent");
+    const jsonOutput = document.getElementById("jsonOutput");
+    const evidenceList = document.getElementById("evidenceList");
+
+    const stages = {
+      request: document.getElementById("requestStage"),
+      planner: document.getElementById("plannerStage"),
+      tool: document.getElementById("toolStage"),
+      answer: document.getElementById("answerStage"),
+    };
+
+    function setStageStatus(stageKey, status) {
+      const element = stages[stageKey];
+      if (!element) return;
+      element.className = "stage";
+      if (status) {
+        element.classList.add(status);
+      }
+    }
+
+    function setStatus(text, kind = "") {
+      statusLine.textContent = text;
+      statusLine.className = "status-line";
+      if (kind) {
+        statusLine.classList.add(kind);
+      }
+    }
+
+    function renderEvidence(result) {
+      const tool = result?.tool_result || {};
+      const rows = [
+        ["Tool", tool.tool_name || result?.plan?.tool_name || "未命中"],
+        ["Version", tool.recommended_version_id != null ? `V${tool.recommended_version_id}` : "暂无"],
+        ["Committer", tool.committer || "暂无"],
+        ["Message", tool.message || "暂无"],
+        ["Time", tool.time || "暂无"],
+      ];
+
+      if (tool.stars != null) rows.push(["Stars", String(tool.stars)]);
+      if (tool.community_rank != null) rows.push(["Community Rank", String(tool.community_rank)]);
+      if (tool.official_reason) rows.push(["Official Reason", tool.official_reason]);
+      if (tool.official_operator) rows.push(["Official Operator", tool.official_operator]);
+      if (tool.official_at) rows.push(["Official Time", tool.official_at]);
+
+      evidenceList.innerHTML = rows.map(([label, value]) => `
+        <div class="evidence-item">
+          <strong>${label}</strong>
+          <span>${value}</span>
+        </div>
+      `).join("");
+    }
+
+    function resetResult() {
+      plannerContent.textContent = "等待执行...";
+      toolContent.textContent = "等待执行...";
+      answerContent.textContent = "等待执行...";
+      jsonOutput.textContent = "等待执行...";
+      evidenceList.innerHTML = `
+        <div class="evidence-item">
+          <strong>状态</strong>
+          <span>等待执行 Agent。</span>
+        </div>
+      `;
+      setStageStatus("request", "active");
+      setStageStatus("planner", "pending");
+      setStageStatus("tool", "pending");
+      setStageStatus("answer", "pending");
+    }
+
+    async function runAgentQuery() {
+      const payload = {
+        question: questionInput.value.trim(),
+        project_id: projectIdInput.value.trim(),
+        filename: filenameInput.value.trim(),
+      };
+
+      if (!payload.question) {
+        setStatus("问题不能为空。", "error");
+        return;
+      }
+
+      requestContent.textContent = JSON.stringify(payload, null, 2);
+      resetResult();
+      runBtn.disabled = true;
+      setStatus("正在执行 Agent。当前链路为：Gateway -> Python Agent -> Tool -> Gateway -> XiaoGuGit。");
+
+      try {
+        const response = await fetch("/api/agent/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || result.detail || `HTTP ${response.status}`);
+        }
+
+        setStageStatus("request", "success");
+        setStageStatus("planner", "success");
+        setStageStatus("tool", "success");
+        setStageStatus("answer", "success");
+
+        plannerContent.textContent = JSON.stringify(result.plan || {}, null, 2);
+        toolContent.textContent = JSON.stringify(result.tool_result || {}, null, 2);
+        answerContent.textContent = result.answer || "Agent 未返回答案。";
+        jsonOutput.textContent = JSON.stringify(result, null, 2);
+        renderEvidence(result);
+        setStatus("执行完成。Planner、Tool 和最终答案都已更新。", "ok");
+      } catch (error) {
+        setStageStatus("planner", "error");
+        setStageStatus("tool", "error");
+        setStageStatus("answer", "error");
+        plannerContent.textContent = "执行失败";
+        toolContent.textContent = String(error.message || error);
+        answerContent.textContent = "Agent 调用失败。";
+        jsonOutput.textContent = JSON.stringify({ error: String(error.message || error) }, null, 2);
+        evidenceList.innerHTML = `
+          <div class="evidence-item">
+            <strong>Error</strong>
+            <span>${String(error.message || error)}</span>
+          </div>
+        `;
+        setStatus(`执行失败：${String(error.message || error)}`, "error");
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    runBtn.addEventListener("click", runAgentQuery);
+    document.querySelectorAll("[data-question]").forEach((button) => {
+      button.addEventListener("click", () => {
+        questionInput.value = button.dataset.question || "";
+        runAgentQuery();
+      });
+    });
+  </script>
+</body>
+</html>

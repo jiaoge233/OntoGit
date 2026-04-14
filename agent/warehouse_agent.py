@@ -48,13 +48,17 @@ def _normalize_env(value: str | None) -> str:
 
 
 def _load_env_values() -> dict[str, str]:
-    base_env = _read_env_file(ROOT_DIR / "xiaogugit" / ".env")
-    initial_mode = _normalize_env(os.environ.get("XG_ENV") or base_env.get("XG_ENV"))
-    mode_env = _read_env_file(ROOT_DIR / "xiaogugit" / f".env.{initial_mode}")
+    agent_base_env = _read_env_file(BASE_DIR / ".env")
+    xg_base_env = _read_env_file(ROOT_DIR / "xiaogugit" / ".env")
+    initial_mode = _normalize_env(os.environ.get("XG_ENV") or agent_base_env.get("XG_ENV") or xg_base_env.get("XG_ENV"))
+    agent_mode_env = _read_env_file(BASE_DIR / f".env.{initial_mode}")
+    xg_mode_env = _read_env_file(ROOT_DIR / "xiaogugit" / f".env.{initial_mode}")
 
     merged: dict[str, str] = {}
-    merged.update(base_env)
-    merged.update(mode_env)
+    merged.update(xg_base_env)
+    merged.update(xg_mode_env)
+    merged.update(agent_base_env)
+    merged.update(agent_mode_env)
     merged.update(os.environ)
     return merged
 

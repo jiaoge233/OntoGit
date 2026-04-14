@@ -78,6 +78,13 @@ class Settings:
     auth_password: str
     inference_url: str
     inference_timeout: int
+    redis_enabled: bool
+    redis_host: str
+    redis_port: int
+    redis_password: str
+    redis_db: int
+    redis_key_prefix: str
+    redis_socket_timeout: float
 
     @property
     def docs_url(self) -> str | None:
@@ -138,4 +145,11 @@ def get_settings() -> Settings:
         auth_password=values.get("XG_AUTH_PASSWORD", "123456"),
         inference_url=values.get("XG_INFERENCE_URL", "http://127.0.0.1:5000/api/llm/probability-reason").strip(),
         inference_timeout=_read_int(values, "XG_INFERENCE_TIMEOUT", 10),
+        redis_enabled=_read_bool(values, "XG_REDIS_ENABLED", False),
+        redis_host=values.get("XG_REDIS_HOST", "127.0.0.1").strip(),
+        redis_port=_read_int(values, "XG_REDIS_PORT", 6379),
+        redis_password=values.get("XG_REDIS_PASSWORD", "").strip(),
+        redis_db=_read_int(values, "XG_REDIS_DB", 0),
+        redis_key_prefix=values.get("XG_REDIS_KEY_PREFIX", "xg").strip() or "xg",
+        redis_socket_timeout=float(values.get("XG_REDIS_SOCKET_TIMEOUT", "1.5")),
     )
