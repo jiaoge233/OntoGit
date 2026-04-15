@@ -157,12 +157,16 @@ class XiaoGuGitManager:
     def _redis_ontology_prefix_registry_key(self, project_id):
         return f"{self._redis_key_prefix}:ontology:prefix_registry:{self._validate_project_id(project_id)}"
 
+    # --- 本体解析 Redis 索引（exact + 前缀倒排）---
+    # 将「路径 / 文件名 stem / JSON 内 name」归一化为同一套 token，用于 HASH 精确键与 SET 前缀键。
     def _normalize_ontology_lookup(self, value):
         normalized = str(value or "").strip().lower()
         if normalized.endswith(".json"):
             normalized = normalized[:-5]
+        # 仅保留字母数字与中文，避免标点干扰匹配与键膨胀
         return "".join(ch for ch in normalized if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
+    # 为单个文件构建候选摘要：aliases 用于后续前缀展开与打分。
     def _build_ontology_candidate(self, project_id, filename):
         safe_filename = self._validate_filename(filename)
         filename_stem = os.path.splitext(os.path.basename(safe_filename))[0]
@@ -185,6 +189,7 @@ class XiaoGuGitManager:
             "aliases": aliases,
         }
 
+    # 扫描仓库内所有非内部文件，汇总为候选列表（可能触发读盘读 JSON）。
     def _collect_project_ontology_candidates(self, project_id):
         candidates = []
         for filename in self._list_repo_files(project_id):
@@ -194,6 +199,8 @@ class XiaoGuGitManager:
                 continue
         return candidates
 
+    # 全量重建项目级本体索引：catalog（详情）、lookup（唯一 alias→文件）、prefix（每个前缀 token→文件集合）。
+    # prefix_registry 记录本次写入的所有 prefix key 全名，刷新时先删旧再写新，避免残留键。
     def _refresh_project_ontology_index(self, project_id):
         if self._redis is None:
             return
@@ -208,7 +215,9 @@ class XiaoGuGitManager:
         catalog_key = self._redis_ontology_catalog_key(project_id)
         registry_key = self._redis_ontology_prefix_registry_key(project_id)
 
+        # alias → 哪些文件使用该别名；同一 alias 多文件时不写入 lookup，避免歧义
         alias_to_files = {}
+        # 每个 alias 的每个前缀（1..len）→ 包含该文件的集合，用于用户输入不完整时的 SET 查询
         prefix_to_files = {}
         for candidate in candidates:
             filename = candidate["filename"]
@@ -220,6 +229,7 @@ class XiaoGuGitManager:
 
         def _write(client):
             pipeline = client.pipeline()
+            # 先按 registry 删掉上一轮的所有 prefix:* 键，再清空 lookup/catalog/registry
             old_prefix_keys = client.smembers(registry_key)
             if old_prefix_keys:
                 pipeline.delete(*list(old_prefix_keys))
@@ -248,6 +258,7 @@ class XiaoGuGitManager:
 
         self._redis_call(_write)
 
+    # 从 catalog HASH 读取单文件候选 JSON；供精确命中与 prefix 命中后反查详情。
     def _get_cached_ontology_candidate(self, project_id, filename):
         def _read(client):
             return client.hget(self._redis_ontology_catalog_key(project_id), self._validate_filename(filename))
@@ -260,6 +271,7 @@ class XiaoGuGitManager:
         except Exception:
             return None
 
+    # 在候选集合内对查询词打分：精确匹配本体名 > stem > alias；再比前缀与包含关系。
     def _score_ontology_candidate(self, query_token, candidate):
         aliases = candidate.get("aliases", [])
         ontology_name = self._normalize_ontology_lookup(candidate.get("ontology_name", ""))
@@ -289,12 +301,15 @@ class XiaoGuGitManager:
             return 120
         return 0
 
+    # 解析流程：lookup 精确命中 → prefix SET 取候选 → 无则拉全 catalog（必要时触发一次索引刷新）→ 仍无则扫盘；
+    # 对候选打分排序，最高分必须唯一，否则抛歧义异常。
     def resolve_ontology_query(self, project_id, query):
         normalized_query = self._normalize_ontology_lookup(query)
         if not normalized_query:
             raise ValueError("query 不能为空")
 
         cached_candidates = []
+        # 1) 唯一 alias 可走 O(1) 精确解析
         exact_filename = self._redis_call(
             lambda client: client.hget(self._redis_ontology_lookup_key(project_id), normalized_query)
         )
@@ -311,6 +326,7 @@ class XiaoGuGitManager:
                     "candidates": [candidate],
                 }
 
+        # 2) 用户输入作为完整前缀 token，命中「某 alias 的前缀键」对应的文件集合
         prefix_filenames = self._redis_call(
             lambda client: sorted(client.smembers(self._redis_ontology_prefix_key(project_id, normalized_query))),
             default=[],
@@ -321,6 +337,7 @@ class XiaoGuGitManager:
                 cached_candidates.append(candidate)
 
         if not cached_candidates:
+            # 3) 前缀未命中或索引为空：用全量 catalog 做模糊候选（catalog 空且 Redis 可用时先重建索引）
             catalog_payload = self._redis_call(
                 lambda client: client.hgetall(self._redis_ontology_catalog_key(project_id)),
                 default={},
@@ -341,6 +358,7 @@ class XiaoGuGitManager:
         candidates = cached_candidates
         matched_by = "redis_fuzzy"
         if not candidates:
+            # 4) Redis 不可用或仍无数据：退回文件系统扫描
             candidates = self._collect_project_ontology_candidates(project_id)
             matched_by = "fallback_scan"
 
@@ -935,6 +953,7 @@ class XiaoGuGitManager:
             "currvision": next_version_id,
         }
         self._refresh_file_cache(project_id, safe_filename)
+        # 写入可能改变路径、内容中的 name 等，需全量重建本体 Redis 索引
         self._refresh_project_ontology_index(project_id)
         return result
 
@@ -987,6 +1006,7 @@ class XiaoGuGitManager:
             "currvision": next_version_id,
         }
         self._refresh_file_cache(project_id, safe_filename)
+        # 删除文件后从索引中移除该文件相关 alias/prefix 映射
         self._refresh_project_ontology_index(project_id)
         return result
 
