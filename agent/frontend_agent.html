@@ -552,11 +552,11 @@
           </div>
           <div class="info-item">
             <strong>当前已接通</strong>
-            <span>社区最高星版本查询、官方推荐版本查询。底层通过 gateway 进入 xiaogugit，推荐读路径优先走 Redis。</span>
+            <span>社区最高星版本查询、官方推荐版本查询、版本时间线、版本内容、版本对比、治理缺口扫描。底层通过 gateway 进入 xiaogugit，推荐读路径优先走 Redis。</span>
           </div>
           <div class="info-item">
             <strong>下一步可扩展</strong>
-            <span>时间线、版本详情、diff、治理缺口、批量项目检索。</span>
+            <span>批量项目检索、跨项目治理策略、自动生成治理工单。</span>
           </div>
         </div>
       </section>
@@ -573,6 +573,26 @@
             <div class="tool-name">get_official_recommendation</div>
             <div class="tool-desc">查询单文件当前官方推荐版本。</div>
             <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">get_file_timeline</div>
+            <div class="tool-desc">查询本体版本时间线和最近变化。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","limit":10}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">get_version_content</div>
+            <div class="tool-desc">读取当前工作区或指定历史版本的本体内容。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","version_id":2}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">compare_versions</div>
+            <div class="tool-desc">比较两个本体版本之间的 JSON 字段差异。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","left_version_id":2,"right_version_id":4}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">find_governance_gaps</div>
+            <div class="tool-desc">扫描项目或单个本体的治理缺口。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校"}</div>
           </div>
         </div>
       </section>
@@ -626,6 +646,7 @@
               <button class="btn primary" id="runBtn">执行链路</button>
               <button class="btn" data-question="student.json 当前社区星标最高的版本是谁？">社区推荐</button>
               <button class="btn" data-question="student.json 当前官方推荐版本是谁？">官方推荐</button>
+              <button class="btn" data-question="demo 项目现在有哪些治理缺口？">治理缺口</button>
             </div>
             <div class="status-line" id="statusLine">当前为前端展示页，默认演示已接通的两条查询链路。</div>
           </div>

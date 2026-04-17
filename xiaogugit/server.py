@@ -21,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger("xiaogugit.api")
+SAFE_ERROR_DETAIL = "请稍后重试"
 
 settings = get_settings()
 app = FastAPI(
@@ -44,6 +45,8 @@ xg = XiaoGuGitManager(
 inference_client = DangGuInferenceClient(
     inference_url=settings.inference_url,
     timeout=settings.inference_timeout,
+    retry_attempts=settings.inference_retry_attempts,
+    retry_backoff_seconds=settings.inference_retry_backoff_seconds,
 )
 _project_locks_guard = Lock()
 _project_locks: dict[str, Lock] = {}
@@ -237,11 +240,12 @@ async def require_login(request: Request, call_next):
 
 
 def _handle_error(exc: Exception):
+    logger.exception("request failed: %s", exc)
     if isinstance(exc, ValueError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=SAFE_ERROR_DETAIL) from exc
     if isinstance(exc, FileNotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=SAFE_ERROR_DETAIL) from exc
+    raise HTTPException(status_code=500, detail=SAFE_ERROR_DETAIL) from exc
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -543,6 +547,37 @@ async def version_rollback(project_id: str, version_id: str, filename: Optional[
 async def write_and_infer(req: WriteInferReq):
     try:
         with _get_project_lock(req.project_id):
+            def infer_probability_with_fallback():
+                result = inference_client.infer_change(
+                    {
+                        "project_id": req.project_id,
+                        "filename": req.filename,
+                        "data": req.data,
+                    }
+                )
+                if not str(result.get("probability", "")).strip():
+                    logger.info(
+                        "[DangGuInference] empty probability from contextual payload, retrying legacy payload"
+                    )
+                    result = inference_client.infer_change(req.data)
+                if not str(result.get("probability", "")).strip():
+                    raise RuntimeError("inference service returned empty probability")
+                return result
+
+            def sync_amended_commit_id(write_result):
+                version_id = write_result.get("version_id")
+                if version_id is None:
+                    return write_result
+                try:
+                    tree = xg.get_file_version_tree(req.project_id, req.filename)
+                    for version in tree.get("versions", []):
+                        if str(version.get("version_id")) == str(version_id):
+                            write_result["commit_id"] = version.get("id") or write_result.get("commit_id")
+                            break
+                except Exception as exc:
+                    logger.warning("failed to sync amended commit id: %s", exc)
+                return write_result
+
             write_result = xg.write_version(
                 req.project_id,
                 req.filename,
@@ -553,6 +588,62 @@ async def write_and_infer(req: WriteInferReq):
                 req.basevision,
             )
             if write_result.get("status") != "success":
+                current_data = xg.read_version(req.project_id, req.filename)
+                if isinstance(current_data, dict) and not str(current_data.get("probability", "")).strip():
+                    try:
+                        inference_result = infer_probability_with_fallback()
+                        logger.info(
+                            "[DangGuInference] %s",
+                            json.dumps(
+                                {
+                                    "project_id": req.project_id,
+                                    "filename": req.filename,
+                                    "probability": inference_result.get("probability", ""),
+                                    "reason": inference_result.get("reason", ""),
+                                    "status": inference_result.get("status", ""),
+                                    "detail": inference_result.get("detail", ""),
+                                    "write_status": write_result.get("status", "no_change"),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
+                        updated_data = xg.update_current_version_fields(
+                            req.project_id,
+                            req.filename,
+                            {
+                                "probability": inference_result.get("probability", ""),
+                            },
+                        )
+                        sync_amended_commit_id(write_result)
+                        return {
+                            "status": "success",
+                            "write_result": write_result,
+                            "inference_result": inference_result,
+                            "probability_update_result": {
+                                "status": "success",
+                                "filename": req.filename,
+                                "version_id": write_result.get("version_id"),
+                                "commit_id": write_result.get("commit_id"),
+                                "updated_fields": ["probability"],
+                                "detail": "content unchanged; probability field was missing and has been updated",
+                            },
+                            "data": updated_data,
+                        }
+                    except Exception as exc:
+                        return {
+                            "status": "partial_success",
+                            "write_result": write_result,
+                            "inference_result": locals().get("inference_result"),
+                            "probability_update_result": {
+                                "status": "failed",
+                                "filename": req.filename,
+                                "version_id": write_result.get("version_id"),
+                                "commit_id": write_result.get("commit_id"),
+                                "updated_fields": ["probability"],
+                                "detail": SAFE_ERROR_DETAIL,
+                            },
+                            "data": None,
+                        }
                 return {
                     "status": write_result.get("status", "no_change"),
                     "write_result": write_result,
@@ -561,7 +652,7 @@ async def write_and_infer(req: WriteInferReq):
                 }
 
             try:
-                inference_result = inference_client.infer_change(req.data)
+                inference_result = infer_probability_with_fallback()
                 logger.info(
                     "[DangGuInference] %s",
                     json.dumps(
@@ -577,13 +668,14 @@ async def write_and_infer(req: WriteInferReq):
                     ),
                 )
 
-                updated_data = xg.update_working_copy_fields(
+                updated_data = xg.update_current_version_fields(
                     req.project_id,
                     req.filename,
                     {
                         "probability": inference_result.get("probability", ""),
                     },
                 )
+                sync_amended_commit_id(write_result)
             except Exception as exc:
                 return {
                     "status": "partial_success",
@@ -595,7 +687,7 @@ async def write_and_infer(req: WriteInferReq):
                         "version_id": write_result.get("version_id"),
                         "commit_id": write_result.get("commit_id"),
                         "updated_fields": ["probability"],
-                        "detail": str(exc),
+                        "detail": SAFE_ERROR_DETAIL,
                     },
                     "data": None,
                 }

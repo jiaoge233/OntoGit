@@ -4,20 +4,17 @@
     "**/gateway/.gotelemetry/**": true,
     "**/gateway.exe": true,
     "**/gateway.exe~": true,
-    "**/xiaogugit/storage/**": true,
     "**/__pycache__/**": true,
     "**/*.pptx": true
   },
   "files.exclude": {
     "**/gateway/.gocache": true,
     "**/gateway/.gotelemetry": true,
-    "**/xiaogugit/storage": true,
     "**/__pycache__": true
   },
   "search.exclude": {
     "**/gateway/.gocache/**": true,
     "**/gateway/.gotelemetry/**": true,
-    "**/xiaogugit/storage/**": true,
     "**/__pycache__/**": true,
     "**/*.pptx": true
   },
@@ -32,7 +29,6 @@
       "-.git",
       "-gateway/.gocache",
       "-gateway/.gotelemetry",
-      "-xiaogugit/storage",
       "-**/__pycache__"
     ]
   }

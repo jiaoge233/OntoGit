@@ -78,6 +78,8 @@ class Settings:
     auth_password: str
     inference_url: str
     inference_timeout: int
+    inference_retry_attempts: int
+    inference_retry_backoff_seconds: float
     redis_enabled: bool
     redis_host: str
     redis_port: int
@@ -145,6 +147,8 @@ def get_settings() -> Settings:
         auth_password=values.get("XG_AUTH_PASSWORD", "123456"),
         inference_url=values.get("XG_INFERENCE_URL", "http://127.0.0.1:5000/api/llm/probability-reason").strip(),
         inference_timeout=_read_int(values, "XG_INFERENCE_TIMEOUT", 10),
+        inference_retry_attempts=_read_int(values, "XG_INFERENCE_RETRY_ATTEMPTS", 3),
+        inference_retry_backoff_seconds=float(values.get("XG_INFERENCE_RETRY_BACKOFF_SECONDS", "0.5")),
         redis_enabled=_read_bool(values, "XG_REDIS_ENABLED", False),
         redis_host=values.get("XG_REDIS_HOST", "127.0.0.1").strip(),
         redis_port=_read_int(values, "XG_REDIS_PORT", 6379),

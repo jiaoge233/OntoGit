@@ -153,3 +153,49 @@ Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/routes"
 ```
 
 更多接口见 [`./API.md`](./API.md)。
+
+## 2026-04-17 更新记录
+
+### 中台总览与页面入口
+
+Gateway 现在作为数据中台统一入口，已挂载以下页面：
+
+- `/login`：统一登录入口。
+- `/ui-dashboard`：数据中台总览页面。
+- `/ui-agent`：Agent 查询台页面。
+- `/probability/*`：代理到 probability 前端和接口。
+- `/xg/*`：代理到 xiaogugit API。
+
+中台总览接口 `GET /api/dashboard/summary` 会聚合：
+
+- `xiaogugit` 健康状态。
+- `probability` 健康状态。
+- 项目、文件、版本与当前内容摘要。
+
+### 浏览器会话与服务调用鉴权
+
+Gateway 同时支持两类调用方式：
+
+- 浏览器访问：通过 `/login` 登录后使用 Cookie / Bearer 会话。
+- 服务调用：通过 `X-API-Key` 访问，Gateway 会为下游 `xiaogugit` 注入兼容 Bearer token。
+
+本地开发推荐配置：
+
+```env
+GATEWAY_SERVICE_API_KEY=local-gateway-key
+GATEWAY_XIAOGUGIT_URL=http://127.0.0.1:8000
+GATEWAY_PROBABILITY_URL=http://127.0.0.1:5000
+```
+
+### 统一接口目录
+
+`GET /api/routes` 和 `API.md` 用于集中记录网关层暴露的接口。后续外部系统优先对接 Gateway，不直接依赖各子模块端口。
+
+### 部署说明
+
+Gateway 已补充 `Dockerfile` 与 `docker-compose.yml`。如果修改了 Go 代码或内嵌 HTML 页面，需要重新执行：
+
+```powershell
+go build .
+.\gateway.exe
+```

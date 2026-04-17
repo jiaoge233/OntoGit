@@ -3,37 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Probability Reason</title>
-    <link rel="stylesheet" href="../styles.css" />
+    <title>概率推理 · Reason</title>
+    <link rel="stylesheet" href="../styles.css?v=20260417-dark" />
   </head>
   <body>
     <main class="container">
       <section class="card">
-        <div id="modeNav" class="nav"></div>
-        <h1 id="modeTitle">Probability Reason</h1>
-        <p id="modeDesc" class="desc">输出概率和原因。</p>
+        <h1 id="modeTitle">概率推理 · Reason</h1>
+        <p id="modeDesc" class="desc">输入本体 JSON 或描述文本，返回真实性概率和简明判断原因。</p>
 
-        <label class="label" for="prompt">用户提示词</label>
+        <label class="label" for="prompt">本体输入</label>
         <textarea
           id="prompt"
           class="textarea"
-          placeholder="请输入待判别的 JSON 或文本内容。"
+          placeholder='例如：{"project_id":"demo","filename":"student.json","data":{"name":"学生","agent":"agent3.2","abilities":["学习","完成作业"],"interactions":[{"target":"老师","type":"请教"}]}}'
         ></textarea>
 
         <div class="actions">
-          <button id="submitBtn" class="button">发送</button>
+          <button id="submitBtn" class="button">开始推理</button>
         </div>
 
         <p id="status" class="status"></p>
 
-        <label class="label" for="result">模型回复</label>
-        <pre id="result" class="result">这里会显示后端返回的内容。</pre>
+        <label class="label" for="result">推理结果</label>
+        <pre id="result" class="result">这里会显示 probability 和 reason。</pre>
       </section>
     </main>
 
     <script>
       window.APP_MODE = "probability-reason";
     </script>
-    <script src="../app.js"></script>
+    <script src="../app.js?v=20260417-dark"></script>
   </body>
 </html>

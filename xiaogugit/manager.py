@@ -618,6 +618,41 @@ class XiaoGuGitManager:
         self._write_json_file(file_path, current_data)
         return current_data
 
+    def update_current_version_fields(self, project_id, filename, fields):
+        safe_filename = self._validate_filename(filename)
+        if not isinstance(fields, dict) or not fields:
+            raise ValueError("fields must be a non-empty object")
+
+        repo = self._get_repo(project_id, create=False)
+        self._abort_pending_revert(repo)
+        file_path = os.path.join(self._project_path(project_id), safe_filename)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"文件 {safe_filename} 当前不存在")
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            current_data = json.load(f)
+
+        if not isinstance(current_data, dict):
+            raise ValueError(f"文件 {safe_filename} 当前内容不是 JSON 对象，无法追加字段")
+
+        current_data.update(fields)
+        self._write_json_file(file_path, current_data)
+
+        repo.git.add(safe_filename)
+        try:
+            repo.git.diff("--cached", "--quiet", "--", safe_filename)
+            has_staged_change = False
+        except git.GitCommandError:
+            has_staged_change = True
+
+        if has_staged_change:
+            # Keep the same version number by amending the current commit instead of creating a new one.
+            repo.git.commit("--amend", "--no-edit")
+            self._refresh_file_cache(project_id, safe_filename)
+            self._refresh_project_ontology_index(project_id)
+
+        return current_data
+
     def _default_meta(self, project_id):
         now = self._now()
         return {

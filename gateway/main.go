@@ -286,9 +286,9 @@ func dashboardSummaryHandler(cfg Config) http.HandlerFunc {
 			Projects []map[string]any `json:"projects"`
 		}
 		if err := fetchJSON(ctx, cfg, http.MethodGet, cfg.XiaoGuGitURL+"/projects", r.Header, &projectPayload); err != nil {
+			log.Printf("dashboard projects load failed: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"detail": "failed to load dashboard projects",
-				"error":  err.Error(),
+				"detail": safeErrorDetail,
 			})
 			return
 		}
@@ -319,11 +319,12 @@ func dashboardSummaryHandler(cfg Config) http.HandlerFunc {
 				Timelines []map[string]any `json:"timelines"`
 			}
 			if err := fetchJSON(ctx, cfg, http.MethodGet, cfg.XiaoGuGitURL+"/timelines/"+url.PathEscape(projectID), r.Header, &timelinePayload); err != nil {
+				log.Printf("dashboard timeline load failed for project %s: %v", projectID, err)
 				summary.Status = "degraded"
 				summary.Data = append(summary.Data, DashboardProjectData{
 					ProjectID:    projectID,
 					Timelines:    []map[string]any{},
-					CurrentFiles: map[string]any{"_error": err.Error()},
+					CurrentFiles: map[string]any{"_error": safeErrorDetail},
 				})
 				continue
 			}
@@ -340,7 +341,8 @@ func dashboardSummaryHandler(cfg Config) http.HandlerFunc {
 				}
 				err := fetchJSON(ctx, cfg, http.MethodGet, cfg.XiaoGuGitURL+"/read/"+url.PathEscape(projectID)+"/"+url.PathEscape(filename), r.Header, &readPayload)
 				if err != nil {
-					currentFiles[filename] = map[string]any{"_error": err.Error()}
+					log.Printf("dashboard file load failed for %s/%s: %v", projectID, filename, err)
+					currentFiles[filename] = map[string]any{"_error": safeErrorDetail}
 					continue
 				}
 				currentFiles[filename] = readPayload.Data
@@ -368,9 +370,9 @@ func agentQueryHandler(cfg Config) http.HandlerFunc {
 
 		var payload AgentQueryRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			log.Printf("agent query invalid request body: %v", err)
 			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"detail": "invalid request body",
-				"error":  err.Error(),
+				"detail": safeErrorDetail,
 			})
 			return
 		}
@@ -387,9 +389,9 @@ func agentQueryHandler(cfg Config) http.HandlerFunc {
 
 		result, err := runAgentQuery(r.Context(), cfg, payload)
 		if err != nil {
+			log.Printf("agent query failed: %v", err)
 			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"detail": "agent query failed",
-				"error":  err.Error(),
+				"detail": safeErrorDetail,
 			})
 			return
 		}
@@ -511,12 +513,14 @@ func publicGatewayBaseURL(cfg Config) string {
 func checkBackend(ctx context.Context, name, targetURL string) HealthStatus {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
-		return HealthStatus{Name: name, URL: targetURL, Status: "error", Detail: err.Error()}
+		log.Printf("health request build failed for %s: %v", name, err)
+		return HealthStatus{Name: name, URL: targetURL, Status: "error", Detail: safeErrorDetail}
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return HealthStatus{Name: name, URL: targetURL, Status: "error", Detail: err.Error()}
+		log.Printf("health request failed for %s: %v", name, err)
+		return HealthStatus{Name: name, URL: targetURL, Status: "error", Detail: safeErrorDetail}
 	}
 	defer resp.Body.Close()
 
@@ -569,9 +573,9 @@ func newReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("gateway proxy error for %s %s: %v", r.Method, r.URL.Path, err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"detail": "gateway proxy error",
-			"error":  err.Error(),
+			"detail": safeErrorDetail,
 		})
 	}
 
@@ -579,6 +583,8 @@ func newReverseProxy(target *url.URL) *httputil.ReverseProxy {
 }
 
 var globalConfig Config
+
+const safeErrorDetail = "请稍后重试"
 
 func applyDownstreamAuth(cfg Config, sourceHeaders, targetHeaders http.Header) {
 	if sourceHeaders == nil || targetHeaders == nil {

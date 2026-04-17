@@ -20,8 +20,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--filename",
-        required=True,
+        default="",
         help="Ontology filename, for example student.json.",
+    )
+    parser.add_argument(
+        "--ontology-name",
+        default="",
+        help="Ontology name or object name, for example 学校 or school.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum history rows for timeline-like tools.",
+    )
+    parser.add_argument(
+        "--version-id",
+        default="",
+        help="Version ID for get_version_content. Empty means current working copy.",
+    )
+    parser.add_argument(
+        "--left-version-id",
+        default="",
+        help="Left version ID for compare_versions.",
+    )
+    parser.add_argument(
+        "--right-version-id",
+        default="",
+        help="Right version ID for compare_versions.",
     )
     parser.add_argument(
         "--base-url",
@@ -68,6 +94,11 @@ def main() -> None:
         arguments={
             "project_id": args.project_id,
             "filename": args.filename,
+            "ontology_name": args.ontology_name,
+            "limit": args.limit,
+            "version_id": args.version_id,
+            "left_version_id": args.left_version_id,
+            "right_version_id": args.right_version_id,
         },
         client=client,
     )

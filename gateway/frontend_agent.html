@@ -508,22 +508,22 @@
         <div class="panel-header">当前能力</div>
         <div class="panel-body stack">
           <div class="info-item">
-            <strong>查询方式</strong>
-            <span>页面会把自然语言问题提交给 Gateway，再由 Gateway 调用 Python Agent。Agent 先让 LLM 规划 tool，再调用受控工具查询版本库，最后生成中文回答。</span>
+            <strong>自然语言查询</strong>
+            <span>直接用中文提问，系统会自动理解你要查询的本体、版本或治理主题，并返回可追溯的结果。</span>
           </div>
           <div class="info-item">
-            <strong>当前已接通的 tools</strong>
-            <span>社区推荐版本查询、官方推荐版本查询。社区推荐路径会优先走 Redis 索引，Redis 不可用时回退到原始版本树实现。</span>
+            <strong>可回答范围</strong>
+            <span>支持社区高星版本、官方推荐版本、版本时间线、版本内容、版本差异和治理缺口等查询。</span>
           </div>
           <div class="info-item">
-            <strong>执行边界</strong>
-            <span>当前 Agent 是只读查询，不会改 Git 版本、不提交治理动作，也不会直接执行任意 shell。</span>
+            <strong>安全边界</strong>
+            <span>查询台只读取版本库信息，不会修改版本、提交推荐或执行治理动作。</span>
           </div>
         </div>
       </section>
 
       <section class="panel">
-        <div class="panel-header">工具注册表</div>
+        <div class="panel-header">查询能力</div>
         <div class="panel-body stack">
           <div class="tool-card">
             <div class="tool-name">get_community_top_version</div>
@@ -535,27 +535,47 @@
             <div class="tool-desc">查询某个本体文件当前官方推荐的版本。</div>
             <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
           </div>
+          <div class="tool-card">
+            <div class="tool-name">get_file_timeline</div>
+            <div class="tool-desc">查询某个本体的版本时间线、最新版本和最近变化。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","limit":10}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">get_version_content</div>
+            <div class="tool-desc">读取某个本体当前工作区内容，或读取指定历史版本内容。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","version_id":2}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">compare_versions</div>
+            <div class="tool-desc">比较某个本体两个版本之间的 JSON 字段差异。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","left_version_id":2,"right_version_id":4}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">find_governance_gaps</div>
+            <div class="tool-desc">扫描项目或单个本体的治理缺口，例如官方推荐缺失、官方社区分歧、概率缺失或偏低。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学校"}</div>
+          </div>
         </div>
       </section>
 
       <section class="panel">
-        <div class="panel-header">链路说明</div>
+        <div class="panel-header">使用流程</div>
         <div class="panel-body stack">
           <div class="info-item">
-            <strong>1. Request</strong>
-            <span>输入自然语言问题，并提供默认的 project_id 与 filename 作为上下文。</span>
+            <strong>1. 提问</strong>
+            <span>输入你关心的项目、本体或版本问题，也可以只写对象名，例如“学校”。</span>
           </div>
           <div class="info-item">
-            <strong>2. Planner</strong>
-            <span>DMXAPI 负责从当前 tools 中选出最合适的一个，并补齐入参。</span>
+            <strong>2. 识别</strong>
+            <span>系统会匹配本体名称、版本号和查询意图，选择合适的数据查询路径。</span>
           </div>
           <div class="info-item">
-            <strong>3. Tool</strong>
-            <span>本地 Python tool 通过 Gateway 查询版本库接口；推荐相关接口优先命中 Redis。</span>
+            <strong>3. 查询</strong>
+            <span>结果来自版本库、推荐轨道和缓存索引，优先使用快速索引并保留降级查询能力。</span>
           </div>
           <div class="info-item">
-            <strong>4. Answer</strong>
-            <span>LLM 基于结构化 tool 结果生成中文结论，并把关键证据一起展示出来。</span>
+            <strong>4. 回答</strong>
+            <span>页面会同时展示结论、关键证据和原始结构化结果，方便复核。</span>
           </div>
         </div>
       </section>
@@ -564,7 +584,7 @@
     <main class="main-view">
       <section class="hero panel">
         <h1>Agent 查询台</h1>
-        <p>这个页面挂在 Gateway 下，走真实的 Agent 执行链路。你可以直接在这里提问，例如“student.json 当前社区星标最高的版本是谁？”或“student.json 当前官方推荐版本是谁？”，页面会展示 Planner、Tool Result 和最终答案。</p>
+        <p>面向本体版本库的自然语言查询入口。你可以直接问“学校当前社区星标最高的版本是谁？”、“学校 V2 和 V4 差在哪？”或“demo 项目有哪些治理缺口？”。</p>
       </section>
 
       <section class="workspace">
@@ -587,6 +607,10 @@
               <button class="btn primary" id="runBtn">执行 Agent</button>
               <button class="btn" type="button" data-question="学校当前社区星标最高的版本是谁？">社区推荐</button>
               <button class="btn" type="button" data-question="学校当前官方推荐版本是谁？">官方推荐</button>
+              <button class="btn" type="button" data-question="学校最近有哪些版本变化？">版本时间线</button>
+              <button class="btn" type="button" data-question="学校当前本体内容是什么？">当前内容</button>
+              <button class="btn" type="button" data-question="学校 V2 和 V4 差在哪？">版本对比</button>
+              <button class="btn" type="button" data-question="demo 项目现在有哪些治理缺口？">治理缺口</button>
             </div>
             <div class="status-line" id="statusLine">等待请求。当前页面会直接调用 /api/agent/query。</div>
           </div>
@@ -784,6 +808,16 @@
           </div>
         `;
         setStatus(`执行失败：${String(error.message || error)}`, "error");
+        console.error(error);
+        toolContent.textContent = "请稍后重试";
+        jsonOutput.textContent = JSON.stringify({ error: "请稍后重试" }, null, 2);
+        evidenceList.innerHTML = `
+          <div class="evidence-item">
+            <strong>Error</strong>
+            <span>请稍后重试</span>
+          </div>
+        `;
+        setStatus("执行失败：请稍后重试", "error");
       } finally {
         runBtn.disabled = false;
       }

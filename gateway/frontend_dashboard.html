@@ -473,8 +473,14 @@
         setStatus(`中台总览已刷新，当前项目：${state.selectedProjectId || "-"}`, "ok");
       } catch (error) {
         setStatus(`中台总览刷新失败：${error.message || error}`, "error");
+        console.error(error);
+        setStatus("中台总览刷新失败：请稍后重试", "error");
       }
     }
+    /*
+        console.error(error);
+        setStatus("中台总览刷新失败：请稍后重试", "error");
+    */
     document.addEventListener("DOMContentLoaded", async () => {
       await refreshDashboard();
     });

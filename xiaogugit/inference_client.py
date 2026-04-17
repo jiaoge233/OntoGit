@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 from urllib import error, request
 
 
+logger = logging.getLogger("xiaogugit.inference_client")
+
+
 class DangGuInferenceClient:
-    def __init__(self, inference_url: str = "", timeout: int = 10):
+    def __init__(
+        self,
+        inference_url: str = "",
+        timeout: int = 10,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 0.5,
+    ):
         self.inference_url = (inference_url or "").strip()
         self.timeout = max(int(timeout or 10), 1)
+        self.retry_attempts = max(int(retry_attempts or 1), 1)
+        self.retry_backoff_seconds = max(float(retry_backoff_seconds or 0), 0.0)
 
     def _build_request_body(self, payload: dict[str, Any]) -> dict[str, Any]:
         return payload
@@ -53,6 +66,28 @@ class DangGuInferenceClient:
                 "detail": "XG_INFERENCE_URL is not configured",
             }
 
+        last_error: Exception | None = None
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                return self._infer_change_once(payload)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt >= self.retry_attempts:
+                    break
+                sleep_seconds = self.retry_backoff_seconds * (2 ** (attempt - 1))
+                logger.warning(
+                    "inference service call failed, retrying attempt %s/%s after %.1fs: %s",
+                    attempt + 1,
+                    self.retry_attempts,
+                    sleep_seconds,
+                    exc,
+                )
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+
+        raise RuntimeError(f"inference service failed after {self.retry_attempts} attempts: {last_error}") from last_error
+
+    def _infer_change_once(self, payload: dict[str, Any]) -> dict[str, Any]:
         req = request.Request(
             self.inference_url,
             data=json.dumps(self._build_request_body(payload), ensure_ascii=False).encode("utf-8"),

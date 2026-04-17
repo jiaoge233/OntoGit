@@ -12,21 +12,28 @@ const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 const modeTitleEl = document.getElementById("modeTitle");
 const modeDescEl = document.getElementById("modeDesc");
-const modeNavEl = document.getElementById("modeNav");
 
-if (modeTitleEl && modeDescEl && modeNavEl) {
+function buildRequestBody(message) {
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Non-JSON input is still supported as a plain prompt.
+  }
+  return { message };
+}
+
+if (modeTitleEl && modeDescEl) {
   if (APP_MODE === "probability-reason") {
-    document.title = "Probability Reason";
-    modeTitleEl.textContent = "Probability Reason";
-    modeDescEl.textContent = "输出概率和原因。";
-    modeNavEl.innerHTML =
-      '<a href="../probability/">切换到 Probability</a> <span>|</span> <strong>当前：Probability Reason</strong>';
+    document.title = "概率推理 · Reason";
+    modeTitleEl.textContent = "概率推理 · Reason";
+    modeDescEl.textContent = "输入本体 JSON 或描述文本，返回真实性概率和简明判断原因。";
   } else {
-    document.title = "Probability";
-    modeTitleEl.textContent = "Probability";
-    modeDescEl.textContent = "只输出百分比概率。";
-    modeNavEl.innerHTML =
-      '<strong>当前：Probability</strong> <span>|</span> <a href="../probability-reason/">切换到 Probability Reason</a>';
+    document.title = "概率推理";
+    modeTitleEl.textContent = "概率推理";
+    modeDescEl.textContent = "输入本体 JSON 或描述文本，只返回百分比概率。";
   }
 }
 
@@ -34,8 +41,10 @@ async function sendMessage() {
   const message = promptInput.value.trim();
 
   if (!message) {
-    statusEl.textContent = "请输入用户提示词。";
-    resultEl.textContent = "这里会显示后端返回的内容。";
+    statusEl.textContent = "请输入本体 JSON 或描述文本。";
+    resultEl.textContent = APP_MODE === "probability-reason"
+      ? "这里会显示 probability 和 reason。"
+      : "这里会显示后端返回的概率。";
     return;
   }
 
@@ -49,7 +58,7 @@ async function sendMessage() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(buildRequestBody(message)),
     });
 
     const data = await response.json();
@@ -63,6 +72,8 @@ async function sendMessage() {
   } catch (error) {
     statusEl.textContent = "调用失败。";
     resultEl.textContent = `${error.message || "发生未知错误。"}\n请求地址：${API_URL}`;
+    console.error(error);
+    resultEl.textContent = "请稍后重试";
   } finally {
     submitBtn.disabled = false;
   }
