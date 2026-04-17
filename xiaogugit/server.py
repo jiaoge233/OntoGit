@@ -48,6 +48,12 @@ inference_client = DangGuInferenceClient(
     retry_attempts=settings.inference_retry_attempts,
     retry_backoff_seconds=settings.inference_retry_backoff_seconds,
 )
+logger.info(
+    "inference client configured: url=%s timeout=%ss retries=%s",
+    settings.inference_url or "(empty — probability calls will be skipped)",
+    settings.inference_timeout,
+    settings.inference_retry_attempts,
+)
 _project_locks_guard = Lock()
 _project_locks: dict[str, Lock] = {}
 FRONTEND_FILE = Path(__file__).with_name("frontend.html")
@@ -223,6 +229,9 @@ async def require_login(request: Request, call_next):
         )
         return response
     if _get_authenticated_user(request):
+        if request.method == "POST" and request.url.path == "/write-and-infer":
+            client_host = request.client.host if request.client else "-"
+            logger.info("incoming POST /write-and-infer (client=%s)", client_host)
         start = time.perf_counter()
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start) * 1000
@@ -546,6 +555,12 @@ async def version_rollback(project_id: str, version_id: str, filename: Optional[
 @app.post("/write-and-infer")
 async def write_and_infer(req: WriteInferReq):
     try:
+        logger.info(
+            "write-and-infer: accepted project_id=%s filename=%s basevision=%s",
+            req.project_id,
+            req.filename,
+            req.basevision,
+        )
         with _get_project_lock(req.project_id):
             def infer_probability_with_fallback():
                 result = inference_client.infer_change(
@@ -630,6 +645,12 @@ async def write_and_infer(req: WriteInferReq):
                             "data": updated_data,
                         }
                     except Exception as exc:
+                        logger.warning(
+                            "write-and-infer probability update failed after no-change write: project_id=%s filename=%s error=%s",
+                            req.project_id,
+                            req.filename,
+                            exc,
+                        )
                         return {
                             "status": "partial_success",
                             "write_result": write_result,
@@ -677,6 +698,12 @@ async def write_and_infer(req: WriteInferReq):
                 )
                 sync_amended_commit_id(write_result)
             except Exception as exc:
+                logger.warning(
+                    "write-and-infer probability update failed: project_id=%s filename=%s error=%s",
+                    req.project_id,
+                    req.filename,
+                    exc,
+                )
                 return {
                     "status": "partial_success",
                     "write_result": write_result,

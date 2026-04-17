@@ -647,7 +647,22 @@ class XiaoGuGitManager:
 
         if has_staged_change:
             # Keep the same version number by amending the current commit instead of creating a new one.
-            repo.git.commit("--amend", "--no-edit")
+            head_commit = repo.head.commit
+            author_name = head_commit.author.name or "System"
+            author_email = head_commit.author.email or "system@local"
+            committer_name = head_commit.committer.name or author_name
+            committer_email = head_commit.committer.email or author_email
+            with repo.git.custom_environment(
+                GIT_AUTHOR_NAME=author_name,
+                GIT_AUTHOR_EMAIL=author_email,
+                GIT_COMMITTER_NAME=committer_name,
+                GIT_COMMITTER_EMAIL=committer_email,
+            ):
+                repo.git.commit(
+                    "--amend",
+                    "--no-edit",
+                    f"--author={author_name} <{author_email}>",
+                )
             self._refresh_file_cache(project_id, safe_filename)
             self._refresh_project_ontology_index(project_id)
 

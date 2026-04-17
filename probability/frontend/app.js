@@ -42,9 +42,10 @@ async function sendMessage() {
 
   if (!message) {
     statusEl.textContent = "请输入本体 JSON 或描述文本。";
-    resultEl.textContent = APP_MODE === "probability-reason"
-      ? "这里会显示 probability 和 reason。"
-      : "这里会显示后端返回的概率。";
+    resultEl.textContent =
+      APP_MODE === "probability-reason"
+        ? "这里会显示 probability 和 reason。"
+        : "这里会显示后端返回的概率。";
     return;
   }
 
@@ -70,9 +71,8 @@ async function sendMessage() {
     resultEl.textContent = data.text || "模型没有返回文本内容。";
     statusEl.textContent = "调用成功。";
   } catch (error) {
-    statusEl.textContent = "调用失败。";
-    resultEl.textContent = `${error.message || "发生未知错误。"}\n请求地址：${API_URL}`;
     console.error(error);
+    statusEl.textContent = "调用失败。";
     resultEl.textContent = "请稍后重试";
   } finally {
     submitBtn.disabled = false;

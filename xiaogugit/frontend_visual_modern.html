@@ -1114,21 +1114,34 @@
       return localStorage.getItem("xg_access_token") || "";
     }
 
-    async function apiRequest(url, options = {}) {
+    async function apiRequest(url, options = {}, timeoutMs = 15000) {
       const headers = new Headers(options.headers || {});
       const token = getAccessToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
-      const response = await fetch(url, { ...options, headers });
-      const text = await response.text();
-      let data = text;
-      try { data = JSON.parse(text); } catch(e){}
-      if (response.status === 401) {
-        localStorage.removeItem("xg_access_token");
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
-        throw new Error("未登录或登录已失效");
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, { ...options, headers, signal: controller.signal });
+        const text = await response.text();
+        let data = text;
+        try { data = JSON.parse(text); } catch(e){}
+        if (response.status === 401) {
+          localStorage.removeItem("xg_access_token");
+          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+          throw new Error("未登录或登录已失效");
+        }
+        if (!response.ok) throw new Error(data.detail || (typeof data === 'string' ? data : JSON.stringify(data)));
+        return data;
+      } catch (e) {
+        if (e && e.name === "AbortError") {
+          throw new Error(`请求超时: ${url}（${Math.round(timeoutMs / 1000)}s）`);
+        }
+        throw e;
+      } finally {
+        clearTimeout(timeoutId);
       }
-      if (!response.ok) throw new Error(data.detail || (typeof data === 'string' ? data : JSON.stringify(data)));
-      return data;
     }
 
     async function logout() {
@@ -1141,9 +1154,9 @@
       window.location.href = "/login";
     }
 
-    const apiGet = (url) => apiRequest(url);
-    const apiPost = (url, payload) => apiRequest(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: payload ? JSON.stringify(payload) : undefined });
-    const apiPostQuery = (url) => apiRequest(url, { method: "POST" });
+    const apiGet = (url, timeoutMs = 15000) => apiRequest(url, {}, timeoutMs);
+    const apiPost = (url, payload, timeoutMs = 15000) => apiRequest(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: payload ? JSON.stringify(payload) : undefined }, timeoutMs);
+    const apiPostQuery = (url, timeoutMs = 15000) => apiRequest(url, { method: "POST" }, timeoutMs);
 
     function getVisualProjectId() { return document.getElementById("visual-project").value.trim(); }
     function getFilenameWithExt(id) { let v = document.getElementById(id).value.trim(); return v && !v.endsWith('.json') ? v + '.json' : v; }
@@ -1514,6 +1527,34 @@
       await Promise.allSettled([refreshVisualization(), refreshGlobalOverview()]);
     }
 
+    /** 避免刷新请求挂起时永远卡在「加载中」、且阻塞 writeVersion 的 finally */
+    async function withTimeout(task, label, ms = 15000) {
+      let timeoutId = null;
+      try {
+        return await Promise.race([
+          task,
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`${label}超时（${Math.round(ms / 1000)}s）`)), ms);
+          })
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+
+    async function refreshAllVisualizationsWithTimeout() {
+      const results = await Promise.allSettled([
+        withTimeout(refreshVisualization(), "主图刷新", 20000),
+        withTimeout(refreshGlobalOverview(), "总览刷新", 20000)
+      ]);
+      const failures = results
+        .filter(result => result.status === "rejected")
+        .map(result => result.reason?.message || String(result.reason));
+      if (failures.length) {
+        throw new Error(failures.join("；"));
+      }
+    }
+
     async function changeSelectedStars(delta) {
       const pid = getVisualProjectId();
       const version = getVersionById(state.selectedVersionId);
@@ -1546,6 +1587,7 @@
         setVisualStatus("A submission is already running. Please wait.", "info");
         return;
       }
+      let writeSucceeded = false;
       try {
         setWritePending(true);
         setVisualStatus("Submitting write request and waiting for probability update...", "info");
@@ -1565,7 +1607,8 @@
           data: JSON.parse(document.getElementById("write-data").value)
         };
         document.getElementById("write-basevision").value = String(resolvedBasevision);
-        const res = await apiPost("/write-and-infer", payload);
+        const res = await apiPost("/write-and-infer", payload, 90000);
+        writeSucceeded = true;
         logAction(res);
         invalidateHoverPreviewCache(payload.filename);
         if (res.status === "partial_success") {
@@ -1575,12 +1618,17 @@
         }
         document.getElementById("visual-project").value = payload.project_id;
         setFilenameWithoutExt("visual-file", payload.filename);
-        await refreshAllVisualizations();
       } catch(e) {
         logAction(`Write Error: ${e.message}`);
         setVisualStatus(`Write failed: ${e.message}`, "error");
       } finally {
         setWritePending(false);
+      }
+      if (!writeSucceeded) return;
+      try {
+        await refreshAllVisualizationsWithTimeout();
+      } catch (e) {
+        setVisualStatus(`提交已成功，但图谱刷新失败: ${e.message}`, "error");
       }
     }
 

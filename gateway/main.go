@@ -37,6 +37,7 @@ type Config struct {
 	ServiceAPIKey  string
 	XGAuthSecret   string
 	XGAuthUsername string
+	AgentDir       string
 }
 
 type HealthStatus struct {
@@ -140,6 +141,7 @@ func loadConfig() Config {
 		ServiceAPIKey:  strings.TrimSpace(values["GATEWAY_SERVICE_API_KEY"]),
 		XGAuthSecret:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_SECRET", getValue(values, "XG_AUTH_SECRET", "xiaogugit-auth-secret"))),
 		XGAuthUsername: strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_USERNAME", getValue(values, "XG_AUTH_USERNAME", "mogong"))),
+		AgentDir:       strings.TrimSpace(values["GATEWAY_AGENT_DIR"]),
 	}
 }
 
@@ -433,7 +435,11 @@ func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (
 		return nil, err
 	}
 
-	scriptPath := filepath.Join(baseDir, "..", "agent", "run_git_query_agent.py")
+	agentDir, err := resolveAgentDir(baseDir, cfg.AgentDir)
+	if err != nil {
+		return nil, err
+	}
+	scriptPath := filepath.Join(agentDir, "run_git_query_agent.py")
 	if _, err := os.Stat(scriptPath); err != nil {
 		return nil, fmt.Errorf("agent script not found: %w", err)
 	}
@@ -460,7 +466,7 @@ func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (
 	}
 
 	cmd := execCommandContext(runCtx, "python", args...)
-	cmd.Dir = filepath.Join(baseDir, "..", "agent")
+	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
 		"PYTHONUTF8=1",
@@ -482,6 +488,30 @@ func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (
 		return nil, fmt.Errorf("invalid agent output: %w", err)
 	}
 	return result, nil
+}
+
+func resolveAgentDir(baseDir, configuredDir string) (string, error) {
+	candidates := []string{}
+	if configuredDir != "" {
+		candidates = append(candidates, configuredDir)
+	}
+	candidates = append(candidates,
+		filepath.Join(baseDir, "agent"),
+		filepath.Join(baseDir, "..", "agent"),
+	)
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		absCandidate, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(absCandidate, "run_git_query_agent.py")); err == nil && !info.IsDir() {
+			return absCandidate, nil
+		}
+	}
+	return "", fmt.Errorf("agent directory not found")
 }
 
 var execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {

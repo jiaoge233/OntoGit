@@ -13,6 +13,9 @@ services:
       XG_PORT: ${XG_PORT:-8000}
     ports:
       - "${XG_PORT:-8000}:8000"
+    # Linux Docker 默认没有 host.docker.internal；若 XG_INFERENCE_URL 指向宿主机上的 probability，需要此行
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./storage:/app/storage
     healthcheck:

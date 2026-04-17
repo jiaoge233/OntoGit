@@ -58,6 +58,10 @@
 | `GATEWAY_SERVICE_API_KEY` | `change-me` | 服务调用 API Key |
 | `GATEWAY_XG_AUTH_SECRET` | 继承 `XG_AUTH_SECRET` 或默认值 | 生成 `xiaogugit` 兼容 token 的签名密钥 |
 | `GATEWAY_XG_AUTH_USERNAME` | `mogong` | 服务调用场景下注入的用户名 |
+| `GATEWAY_AGENT_DIR` | 自动推断；容器内为 `/app/agent` | Agent 脚本目录 |
+| `DMXAPI_API_KEY` | 空 | Gateway 容器内运行 Agent 时传给 Agent 的模型密钥 |
+| `DMXAPI_BASE_URL` | `https://www.dmxapi.cn/v1` | Gateway 容器内运行 Agent 时传给 Agent 的模型服务地址 |
+| `DMXAPI_MODEL` | `gpt-5.4` | Gateway 容器内运行 Agent 时传给 Agent 的模型名称 |
 
 示例见 [`./.env.example`](./.env.example)。
 
@@ -86,12 +90,14 @@ go build .
 ### 构建镜像
 
 ```powershell
-docker build -t data-infra-gateway .
+cd "C:\Users\gaozh\Desktop\data infra"
+docker build -f gateway/Dockerfile -t data-infra-gateway .
 ```
 
 ### 使用 compose 启动
 
 ```powershell
+cd "C:\Users\gaozh\Desktop\data infra\gateway"
 docker compose up --build
 ```
 
@@ -99,11 +105,14 @@ docker compose up --build
 
 - `xiaogugit` 在 `http://host.docker.internal:8000`
 - `probability` 在 `http://host.docker.internal:5000`
+- Agent 作为脚本依赖打包在 Gateway 镜像内，不需要单独启动容器
 
 如果要接容器内服务，改这两个环境变量即可：
 
 - `GATEWAY_XIAOGUGIT_URL`
 - `GATEWAY_PROBABILITY_URL`
+
+如果要在容器内使用 `/ui-agent` 或 `POST /api/agent/query`，需要给 gateway 容器提供 `DMXAPI_API_KEY`。compose 会把该环境变量传给容器内的 Agent 脚本。
 
 ## 核心能力
 
@@ -193,9 +202,9 @@ GATEWAY_PROBABILITY_URL=http://127.0.0.1:5000
 
 ### 部署说明
 
-Gateway 已补充 `Dockerfile` 与 `docker-compose.yml`。如果修改了 Go 代码或内嵌 HTML 页面，需要重新执行：
+Gateway 的 Docker 镜像现在会同时打包 `agent` 目录，并安装 `agent/requirements.txt`。如果修改了 Go 代码、内嵌 HTML 页面或 Agent 脚本，需要重新构建镜像：
 
 ```powershell
-go build .
-.\gateway.exe
+cd "C:\Users\gaozh\Desktop\data infra\gateway"
+docker compose up --build
 ```
