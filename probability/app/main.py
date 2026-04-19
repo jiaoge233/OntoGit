@@ -8,7 +8,7 @@ from typing import Any
 from urllib import error, parse, request
 
 import uvicorn
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
@@ -21,7 +21,35 @@ logging.basicConfig(
 logger = logging.getLogger("probability.api")
 SAFE_ERROR_DETAIL = "请稍后重试"
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _normalize_env(value: str | None) -> str:
+    normalized = (value or "development").strip().lower()
+    alias_map = {
+        "dev": "development",
+        "development": "development",
+        "prod": "production",
+        "production": "production",
+    }
+    return alias_map.get(normalized, "development")
+
+
+def _load_layered_env() -> None:
+    base_env = dotenv_values(BASE_DIR / ".env")
+    mode = _normalize_env(os.environ.get("PROBABILITY_ENV") or base_env.get("PROBABILITY_ENV"))
+    mode_env = dotenv_values(BASE_DIR / f".env.{mode}")
+
+    merged: dict[str, str] = {}
+    for source in (base_env, mode_env, os.environ):
+        for key, value in source.items():
+            if key and value is not None:
+                merged[key] = str(value)
+    merged["PROBABILITY_ENV"] = _normalize_env(merged.get("PROBABILITY_ENV"))
+    os.environ.update(merged)
+
+
+_load_layered_env()
 
 
 def build_client() -> OpenAI:
@@ -29,7 +57,7 @@ def build_client() -> OpenAI:
     base_url = os.getenv("DMXAPI_BASE_URL", "https://www.dmxapi.cn/v1")
 
     if not api_key:
-        raise RuntimeError("DMXAPI_API_KEY is not configured. Please set it in .env.")
+        raise RuntimeError("DMXAPI_API_KEY is not configured. Please set it in .env or the active .env.<mode> file.")
 
     return OpenAI(api_key=api_key, base_url=base_url)
 
@@ -71,6 +99,13 @@ def get_xiaogugit_auth_headers() -> dict[str, str]:
     token = os.getenv("XIAOGUGIT_BEARER_TOKEN", "").strip()
     if token:
         return {"Authorization": f"Bearer {token}"}
+    api_key = (
+        os.getenv("XIAOGUGIT_API_KEY", "").strip()
+        or os.getenv("XG_SERVICE_API_KEY", "").strip()
+        or os.getenv("GATEWAY_SERVICE_API_KEY", "").strip()
+    )
+    if api_key:
+        return {"X-API-Key": api_key}
     return {}
 
 

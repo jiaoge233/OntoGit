@@ -31,12 +31,14 @@ var loginHTML []byte
 var agentHTML []byte
 
 type Config struct {
+	Env            string
 	Addr           string
 	XiaoGuGitURL   string
 	ProbabilityURL string
 	ServiceAPIKey  string
 	XGAuthSecret   string
 	XGAuthUsername string
+	XGAuthCookie   string
 	AgentDir       string
 }
 
@@ -104,18 +106,19 @@ func main() {
 	}
 
 	xiaoGuGitProxy := newReverseProxy(xiaoGuGitURL)
+	probabilityProxy := withStripPrefix("/probability", newReverseProxy(probabilityURL))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg))
 	mux.HandleFunc("/ui-dashboard", dashboardHandler())
 	mux.HandleFunc("/ui-agent", agentPageHandler())
 	mux.HandleFunc("/login", loginHandler())
 	mux.HandleFunc("/api/routes", routesHandler())
-	mux.HandleFunc("/api/dashboard/summary", dashboardSummaryHandler(cfg))
-	mux.HandleFunc("/api/agent/query", agentQueryHandler(cfg))
+	mux.Handle("/api/dashboard/summary", requireGatewayAuth(cfg, dashboardSummaryHandler(cfg)))
+	mux.Handle("/api/agent/query", requireGatewayAuth(cfg, agentQueryHandler(cfg)))
 	mux.Handle("/auth/", xiaoGuGitProxy)
-	mux.Handle("/xg/", withStripPrefix("/xg", xiaoGuGitProxy))
-	mux.Handle("/probability/", withStripPrefix("/probability", newReverseProxy(probabilityURL)))
-	mux.Handle("/", rootOrXiaoGuGitHandler(cfg, xiaoGuGitProxy))
+	mux.Handle("/xg/", requireGatewayAuth(cfg, withStripPrefix("/xg", xiaoGuGitProxy)))
+	mux.Handle("/probability/", allowPublicHealth("/probability", probabilityProxy, requireGatewayAuth(cfg, probabilityProxy)))
+	mux.Handle("/", rootOrXiaoGuGitHandler(cfg, requireGatewayAuth(cfg, xiaoGuGitProxy)))
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -135,12 +138,14 @@ func main() {
 func loadConfig() Config {
 	values := buildMergedEnv()
 	return Config{
+		Env:            normalizeEnv(getValue(values, "GATEWAY_ENV", "development")),
 		Addr:           getValue(values, "GATEWAY_ADDR", ":8080"),
 		XiaoGuGitURL:   strings.TrimRight(getValue(values, "GATEWAY_XIAOGUGIT_URL", "http://127.0.0.1:8000"), "/"),
 		ProbabilityURL: strings.TrimRight(getValue(values, "GATEWAY_PROBABILITY_URL", "http://127.0.0.1:5000"), "/"),
 		ServiceAPIKey:  strings.TrimSpace(values["GATEWAY_SERVICE_API_KEY"]),
 		XGAuthSecret:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_SECRET", getValue(values, "XG_AUTH_SECRET", "xiaogugit-auth-secret"))),
 		XGAuthUsername: strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_USERNAME", getValue(values, "XG_AUTH_USERNAME", "mogong"))),
+		XGAuthCookie:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_COOKIE_NAME", getValue(values, "XG_AUTH_COOKIE_NAME", "xg_session"))),
 		AgentDir:       strings.TrimSpace(values["GATEWAY_AGENT_DIR"]),
 	}
 }
@@ -155,13 +160,16 @@ func getenv(key, fallback string) string {
 
 func buildMergedEnv() map[string]string {
 	values := map[string]string{}
-	for _, path := range []string{
-		filepath.Join(".", ".env"),
-		filepath.Join(".", ".env.local"),
-	} {
-		for key, value := range readEnvFile(path) {
-			values[key] = value
-		}
+	baseEnv := readEnvFile(filepath.Join(".", ".env"))
+	mode := normalizeEnv(firstNonEmpty(os.Getenv("GATEWAY_ENV"), baseEnv["GATEWAY_ENV"]))
+	for key, value := range baseEnv {
+		values[key] = value
+	}
+	for key, value := range readEnvFile(filepath.Join(".", ".env."+mode)) {
+		values[key] = value
+	}
+	for key, value := range readEnvFile(filepath.Join(".", ".env.local")) {
+		values[key] = value
 	}
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
@@ -169,6 +177,7 @@ func buildMergedEnv() map[string]string {
 			values[key] = value
 		}
 	}
+	values["GATEWAY_ENV"] = normalizeEnv(values["GATEWAY_ENV"])
 	return values
 }
 
@@ -202,6 +211,26 @@ func getValue(values map[string]string, key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeEnv(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "prod", "production":
+		return "production"
+	case "dev", "development", "":
+		return "development"
+	default:
+		return "development"
+	}
 }
 
 func rootHandler(cfg Config) http.HandlerFunc {
@@ -644,7 +673,17 @@ func serviceAPIKeyMatches(cfg Config, sourceHeaders http.Header) bool {
 	if strings.TrimSpace(cfg.ServiceAPIKey) == "" || sourceHeaders == nil {
 		return false
 	}
-	return hmac.Equal([]byte(strings.TrimSpace(sourceHeaders.Get("X-API-Key"))), []byte(cfg.ServiceAPIKey))
+	requestAPIKey := strings.TrimSpace(sourceHeaders.Get("X-API-Key"))
+	if requestAPIKey == "" {
+		requestAPIKey = strings.TrimSpace(sourceHeaders.Get("apikey"))
+	}
+	if requestAPIKey == "" {
+		authorization := strings.TrimSpace(sourceHeaders.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(authorization), "apikey ") {
+			requestAPIKey = strings.TrimSpace(authorization[len("apikey "):])
+		}
+	}
+	return requestAPIKey != "" && hmac.Equal([]byte(requestAPIKey), []byte(cfg.ServiceAPIKey))
 }
 
 func buildServiceAccessToken(cfg Config) string {
@@ -659,6 +698,83 @@ func buildServiceAccessToken(cfg Config) string {
 	signature := hmac.New(sha256.New, []byte(cfg.XGAuthSecret))
 	signature.Write([]byte(payloadB64))
 	return payloadB64 + "." + fmt.Sprintf("%x", signature.Sum(nil))
+}
+
+func requireGatewayAuth(cfg Config, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gatewayRequestAuthenticated(cfg, r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"detail": "Unauthorized",
+		})
+	})
+}
+
+func allowPublicHealth(prefix string, publicNext, protectedNext http.Handler) http.Handler {
+	healthPath := strings.TrimRight(prefix, "/") + "/health"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == healthPath {
+			publicNext.ServeHTTP(w, r)
+			return
+		}
+		protectedNext.ServeHTTP(w, r)
+	})
+}
+
+func gatewayRequestAuthenticated(cfg Config, r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if serviceAPIKeyMatches(cfg, r.Header) {
+		return true
+	}
+	if gatewayBearerAuthenticated(cfg, r.Header.Get("Authorization")) {
+		return true
+	}
+	if cfg.XGAuthCookie != "" {
+		if cookie, err := r.Cookie(cfg.XGAuthCookie); err == nil && gatewayTokenAuthenticated(cfg, cookie.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayBearerAuthenticated(cfg Config, authorization string) bool {
+	authorization = strings.TrimSpace(authorization)
+	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		return false
+	}
+	return gatewayTokenAuthenticated(cfg, strings.TrimSpace(authorization[len("bearer "):]))
+}
+
+func gatewayTokenAuthenticated(cfg Config, token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" || !strings.Contains(token, ".") || strings.TrimSpace(cfg.XGAuthSecret) == "" {
+		return false
+	}
+	payloadB64, signatureHex, ok := strings.Cut(token, ".")
+	if !ok || payloadB64 == "" || signatureHex == "" {
+		return false
+	}
+
+	signature := hmac.New(sha256.New, []byte(cfg.XGAuthSecret))
+	signature.Write([]byte(payloadB64))
+	expectedSignature := fmt.Sprintf("%x", signature.Sum(nil))
+	if !hmac.Equal([]byte(signatureHex), []byte(expectedSignature)) {
+		return false
+	}
+
+	payloadRaw, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	if err != nil {
+		return false
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(payload["username"]) == strings.TrimSpace(cfg.XGAuthUsername)
 }
 
 func withStripPrefix(prefix string, next http.Handler) http.Handler {

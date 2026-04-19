@@ -100,7 +100,7 @@ func gatewayRouteCatalog() []RouteDoc {
 			Path:        "/probability/*",
 			Module:      "gateway->probability",
 			Upstream:    "probability",
-			Auth:        "none by default; can still send bearer if needed",
+			Auth:        "browser session, bearer, or X-API-Key; health is public",
 			Description: "Unified prefixed access to probability APIs.",
 		},
 		{
@@ -181,7 +181,7 @@ func gatewayRouteCatalog() []RouteDoc {
 			Path:        "/probability/api/llm/probability-reason",
 			Module:      "probability",
 			Upstream:    "probability:/api/llm/probability-reason",
-			Auth:        "none",
+			Auth:        "browser session, bearer, or X-API-Key",
 			Description: "Run probability + reason LLM inference.",
 		},
 		{
@@ -190,7 +190,7 @@ func gatewayRouteCatalog() []RouteDoc {
 			Path:        "/probability/api/llm/probability",
 			Module:      "probability",
 			Upstream:    "probability:/api/llm/probability",
-			Auth:        "none",
+			Auth:        "browser session, bearer, or X-API-Key",
 			Description: "Run probability-only LLM inference.",
 		},
 	}

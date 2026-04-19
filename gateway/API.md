@@ -67,10 +67,10 @@
 
 | 名称 | 方法 | 路径 | 鉴权 | 上游 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| probability_proxy | `ANY` | `/probability/*` | `none by default; can still send bearer if needed` | `probability` | `probability` 全量统一前缀入口 |
+| probability_proxy | `ANY` | `/probability/*` | `browser session, bearer, or X-API-Key; health is public` | `probability` | `probability` 全量统一前缀入口 |
 | probability_health | `GET` | `/probability/health` | `none` | `probability:/health` | 概率服务健康检查 |
-| probability_reason | `POST` | `/probability/api/llm/probability-reason` | `none` | `probability:/api/llm/probability-reason` | 返回概率和理由 |
-| probability_score_only | `POST` | `/probability/api/llm/probability` | `none` | `probability:/api/llm/probability` | 仅返回概率 |
+| probability_reason | `POST` | `/probability/api/llm/probability-reason` | `browser session, bearer, or X-API-Key` | `probability:/api/llm/probability-reason` | 返回概率和理由 |
+| probability_score_only | `POST` | `/probability/api/llm/probability` | `browser session, bearer, or X-API-Key` | `probability:/api/llm/probability` | 仅返回概率 |
 
 ## 示例
 
@@ -146,6 +146,7 @@ $body = @{
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://127.0.0.1:8080/probability/api/llm/probability-reason" `
+  -Headers @{ "X-API-Key" = "change-me" } `
   -ContentType "application/json; charset=utf-8" `
   -Body $body
 ```

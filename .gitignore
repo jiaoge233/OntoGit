@@ -1,6 +1,7 @@
 files/
 agent/.env
 gateway/.env
+gateway/.env.local
 xiaogugit/.env
 
 __pycache__/

@@ -196,7 +196,29 @@ def _extract_bearer_token(request: Request) -> str | None:
     return token or None
 
 
+def _extract_api_key(request: Request) -> str | None:
+    api_key = request.headers.get("x-api-key") or request.headers.get("apikey") or ""
+    if api_key.strip():
+        return api_key.strip()
+
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("apikey "):
+        return authorization[7:].strip() or None
+    return None
+
+
+def _api_key_matches(request: Request) -> bool:
+    expected_api_key = settings.service_api_key.strip()
+    request_api_key = _extract_api_key(request)
+    if not expected_api_key or not request_api_key:
+        return False
+    return hmac.compare_digest(request_api_key.encode("utf-8"), expected_api_key.encode("utf-8"))
+
+
 def _get_authenticated_user(request: Request) -> str | None:
+    if _api_key_matches(request):
+        return settings.auth_username
+
     token = _extract_bearer_token(request) or request.cookies.get(settings.auth_cookie_name)
     payload = _decode_access_token(token)
     username = payload.get("username") if payload else None

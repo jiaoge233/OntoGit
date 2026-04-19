@@ -47,7 +47,21 @@
 
 当请求带 `X-API-Key` 且匹配时，gateway 会自动生成下游 `xiaogugit` 可识别的 Bearer token，因此不需要先手动登录。
 
+`/xg/*`、`/probability/*`、`/api/dashboard/summary` 和 `/api/agent/query` 现在都先由 gateway 统一鉴权；`/health`、`/api/routes`、`/login`、`/auth/login` 以及 `/probability/health` 保持公开。
+
 ## 环境变量
+
+Gateway 使用和下游服务一致的分层配置：`.env` 只负责选择 `GATEWAY_ENV`，然后加载 `.env.development` 或 `.env.production`，最后由系统环境变量覆盖。
+
+```env
+GATEWAY_ENV=development
+```
+
+切到生产环境只需要改成：
+
+```env
+GATEWAY_ENV=production
+```
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |

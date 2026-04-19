@@ -114,6 +114,7 @@ Copy-Item .env.example .env
 | `XG_AUTH_COOKIE_NAME` | 登录 cookie 名称 | `xg_session` |
 | `XG_AUTH_USERNAME` | 登录用户名 | `mogong` |
 | `XG_AUTH_PASSWORD` | 登录密码 | `123456` |
+| `XG_SERVICE_API_KEY` / `XG_API_KEY` | 服务调用 API Key（为空则关闭） | 空 |
 | `XG_INFERENCE_URL` | 概率服务地址 | `http://127.0.0.1:5000/api/llm/probability-reason` |
 | `XG_INFERENCE_TIMEOUT` | 概率服务超时秒数 | `10` |
 | `XG_REDIS_ENABLED` | 是否启用 Redis 缓存 | `false` |
@@ -150,6 +151,7 @@ uvicorn server:app --host 127.0.0.1 --port 8000 --reload
 
 - 除 `/login`、`/auth/login`、`/auth/logout`、`/health` 与文档相关路径外，其余接口默认需要登录
 - 登录成功后，服务会同时返回 `Bearer access_token`，并写入 HttpOnly Cookie
+- 服务调用可配置 `XG_SERVICE_API_KEY` 后使用 `X-API-Key: <key>`，也兼容请求头 `apikey: <key>` 与 `Authorization: ApiKey <key>`
 
 ## Docker 部署
 
@@ -180,6 +182,7 @@ docker compose up --build -d
 ```env
 XG_AUTH_USERNAME=mogong
 XG_AUTH_PASSWORD=123456
+XG_SERVICE_API_KEY=change-me
 ```
 
 登录请求：
@@ -194,6 +197,7 @@ curl -X POST "http://127.0.0.1:8000/auth/login" \
 
 - 使用响应里的 `access_token` 走 `Authorization: Bearer <token>`
 - 或复用服务写入的登录 Cookie
+- 或配置 `XG_SERVICE_API_KEY` 后直接走 `X-API-Key: <key>`
 
 ## Redis 加速说明
 

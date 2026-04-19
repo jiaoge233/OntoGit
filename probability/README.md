@@ -50,6 +50,7 @@ PROBABILITY_GIT_CACHE_ENABLED=true
 PROBABILITY_DEFAULT_PROJECT_ID=demo
 XIAOGUGIT_BASE_URL=http://127.0.0.1:8000
 XIAOGUGIT_TIMEOUT=2
+XIAOGUGIT_API_KEY=change-me
 XIAOGUGIT_AUTH_USERNAME=mogong
 XIAOGUGIT_AUTH_PASSWORD=123456
 ```
@@ -84,6 +85,18 @@ DMXAPI_RETRY_BACKOFF_SECONDS=0.8
 - 日志格式包含：请求时间、方法、路径、状态码、耗时。
 
 ## 环境变量
+
+服务会按 `.env`、`.env.development` / `.env.production`、系统环境变量的顺序合并配置。切换环境时只需要修改 `.env` 里的 `PROBABILITY_ENV`：
+
+```env
+PROBABILITY_ENV=development
+```
+
+生产环境改为：
+
+```env
+PROBABILITY_ENV=production
+```
 
 ```env
 DMXAPI_API_KEY=sk-xxx

@@ -76,6 +76,7 @@ class Settings:
     auth_cookie_name: str
     auth_username: str
     auth_password: str
+    service_api_key: str
     inference_url: str
     inference_timeout: int
     inference_retry_attempts: int
@@ -145,6 +146,12 @@ def get_settings() -> Settings:
         auth_cookie_name=values.get("XG_AUTH_COOKIE_NAME", "xg_session"),
         auth_username=values.get("XG_AUTH_USERNAME", "mogong"),
         auth_password=values.get("XG_AUTH_PASSWORD", "123456"),
+        service_api_key=(
+            values.get("XG_SERVICE_API_KEY")
+            or values.get("XG_API_KEY")
+            or values.get("GATEWAY_SERVICE_API_KEY")
+            or ""
+        ).strip(),
         inference_url=values.get("XG_INFERENCE_URL", "http://127.0.0.1:5000/api/llm/probability-reason").strip(),
         inference_timeout=_read_int(values, "XG_INFERENCE_TIMEOUT", 10),
         inference_retry_attempts=_read_int(values, "XG_INFERENCE_RETRY_ATTEMPTS", 3),
