@@ -51,7 +51,14 @@
 
 ## 环境变量
 
-Gateway 使用和下游服务一致的分层配置：`.env` 只负责选择 `GATEWAY_ENV`，然后加载 `.env.development` 或 `.env.production`，最后由系统环境变量覆盖。
+Gateway 使用分层配置，但仓库只保留 `.env.example` 模板：
+
+- `gateway/.env`：本机私有文件，建议只放 `GATEWAY_ENV` 来选择当前环境；不提交。
+- `gateway/.env.development`：本机开发环境私有文件；不提交。
+- `gateway/.env.production`：本机/服务器生产环境私有文件；不提交。
+- 系统环境变量优先级最高，可覆盖上述文件。
+
+最小 `.env` 示例：
 
 ```env
 GATEWAY_ENV=development
@@ -63,12 +70,14 @@ GATEWAY_ENV=development
 GATEWAY_ENV=production
 ```
 
+直接运行二进制时，gateway 会按 `.env -> .env.<GATEWAY_ENV> -> .env.local -> 系统环境变量` 的顺序合并配置。Docker Compose 启动时不会把这些文件打进镜像，而是在运行容器时读取 `.env` 和对应的 `.env.<GATEWAY_ENV>` 并注入容器。
+
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GATEWAY_PORT` | `8080` | compose 暴露端口 |
 | `GATEWAY_ADDR` | `:8080` | gateway 监听地址 |
-| `GATEWAY_XIAOGUGIT_URL` | `http://127.0.0.1:8000` | `xiaogugit` 上游地址 |
-| `GATEWAY_PROBABILITY_URL` | `http://127.0.0.1:5000` | `probability` 上游地址 |
+| `GATEWAY_XIAOGUGIT_URL` | `http://127.0.0.1:8000` | `xiaogugit` 上游地址；Docker 中通常使用 `http://host.docker.internal:8000` |
+| `GATEWAY_PROBABILITY_URL` | `http://127.0.0.1:5000` | `probability` 上游地址；Docker 中通常使用 `http://host.docker.internal:5000` |
 | `GATEWAY_SERVICE_API_KEY` | `change-me` | 服务调用 API Key |
 | `GATEWAY_XG_AUTH_SECRET` | 继承 `XG_AUTH_SECRET` 或默认值 | 生成 `xiaogugit` 兼容 token 的签名密钥 |
 | `GATEWAY_XG_AUTH_USERNAME` | `mogong` | 服务调用场景下注入的用户名 |
@@ -77,7 +86,7 @@ GATEWAY_ENV=production
 | `DMXAPI_BASE_URL` | `https://www.dmxapi.cn/v1` | Gateway 容器内运行 Agent 时传给 Agent 的模型服务地址 |
 | `DMXAPI_MODEL` | `gpt-5.4` | Gateway 容器内运行 Agent 时传给 Agent 的模型名称 |
 
-示例见 [`./.env.example`](./.env.example)。
+示例见 [`./.env.example`](./.env.example)。不要把真实 API Key、MySQL 密码、服务 API Key 写入已跟踪文件。
 
 ## 本地启动
 
@@ -117,7 +126,7 @@ docker compose up --build
 
 默认 compose 假设宿主机上已经有：
 
-- `xiaogugit` 在 `http://host.docker.internal:8000`
+- `xiaogugit` 在 `http://host.docker.internal:8000`，并且宿主机端口建议只绑定 `127.0.0.1:8000`
 - `probability` 在 `http://host.docker.internal:5000`
 - Agent 作为脚本依赖打包在 Gateway 镜像内，不需要单独启动容器
 
@@ -242,7 +251,7 @@ GATEWAY_MYSQL_DSN=root:123456@tcp(localhost:3306)/app?parseTime=true&charset=utf
 本地和线上配置继续分离：
 
 - `gateway/.env.development`：默认连接 `localhost:3306`。
-- `gateway/.env.production`：默认连接 compose 内的 `mysql:3306`。
+- `gateway/.env.production`：生产建议连接宿主机已发布的 MySQL，例如 `host.docker.internal:3306`。
 
 Docker Compose 默认不再启动 MySQL，建议连接已经发布到宿主机 3306 的 MySQL 容器。
 ## 2026-04-20 Idempotent Version Stars

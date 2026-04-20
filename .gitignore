@@ -1,6 +1,14 @@
 files/
+probability/
+probaility/
+proability/
 agent/.env
 gateway/.env
+gateway/.env.development
+gateway/.env.production
+gateway/.env.*
+!gateway/.env.example
+gateway/.env.*.local
 gateway/.env.local
 xiaogugit/.env
 

@@ -14,7 +14,7 @@ services:
       XG_PORT: ${XG_PORT:-8000}
       XG_SERVICE_API_KEY: ${XG_SERVICE_API_KEY:-${GATEWAY_SERVICE_API_KEY:-}}
     ports:
-      - "${XG_PORT:-8000}:8000"
+      - "${XG_BIND_ADDR:-127.0.0.1}:${XG_PORT:-8000}:8000"
     # Linux Docker 默认没有 host.docker.internal；若 XG_INFERENCE_URL 指向宿主机上的 probability，需要此行
     extra_hosts:
       - "host.docker.internal:host-gateway"

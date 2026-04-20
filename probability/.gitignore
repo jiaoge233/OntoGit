@@ -1,6 +1,0 @@
-.env
-.env.development
-.env.production
-__pycache__/
-.pytest_cache/
-*.pyc

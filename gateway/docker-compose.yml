@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+      - .env.${GATEWAY_ENV:-development}
     environment:
       GATEWAY_ADDR: :8080
       GATEWAY_XIAOGUGIT_URL: ${GATEWAY_XIAOGUGIT_URL:-http://host.docker.internal:8000}

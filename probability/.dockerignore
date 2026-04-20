@@ -1,7 +1,0 @@
-.git
-.cursor
-.env
-__pycache__/
-*.pyc
-.pytest_cache/
-agent-transcripts/
