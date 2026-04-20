@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +21,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 //go:embed frontend_dashboard.html
@@ -30,6 +37,12 @@ var loginHTML []byte
 //go:embed frontend_agent.html
 var agentHTML []byte
 
+//go:embed frontend_users.html
+var usersHTML []byte
+
+//go:embed frontend_api_docs.html
+var apiDocsHTML []byte
+
 type Config struct {
 	Env            string
 	Addr           string
@@ -40,6 +53,7 @@ type Config struct {
 	XGAuthUsername string
 	XGAuthCookie   string
 	AgentDir       string
+	MySQLDSN       string
 }
 
 type HealthStatus struct {
@@ -89,11 +103,50 @@ type AgentQueryRequest struct {
 	ProjectID  string `json:"project_id"`
 	Filename   string `json:"filename"`
 	IncludeRaw bool   `json:"include_raw"`
+	AuthAPIKey string `json:"-"`
+}
+
+type AuthPrincipal struct {
+	Kind     string
+	UserID   int64
+	Username string
+	APIKeyID int64
+}
+
+type RegisterRequest struct {
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type CreateAPIKeyRequest struct {
+	Name string `json:"name"`
+}
+
+type StarRequest struct {
+	ProjectID string `json:"project_id"`
+	Filename  string `json:"filename"`
+	VersionID int64  `json:"version_id"`
 }
 
 func main() {
 	cfg := loadConfig()
 	globalConfig = cfg
+	store, err := initUserStore(cfg)
+	if err != nil {
+		log.Fatalf("gateway user store init failed: %v", err)
+	}
+	userStore = store
+	if store == nil {
+		log.Printf("gateway mysql user store disabled")
+	} else {
+		log.Printf("gateway mysql user store enabled")
+	}
 
 	xiaoGuGitURL, err := url.Parse(cfg.XiaoGuGitURL)
 	if err != nil {
@@ -109,16 +162,25 @@ func main() {
 	probabilityProxy := withStripPrefix("/probability", newReverseProxy(probabilityURL))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg))
-	mux.HandleFunc("/ui-dashboard", dashboardHandler())
-	mux.HandleFunc("/ui-agent", agentPageHandler())
+	mux.HandleFunc("/ui-dashboard", protectedHTMLHandler(cfg, dashboardHTML))
+	mux.HandleFunc("/ui-agent", protectedHTMLHandler(cfg, agentHTML))
+	mux.HandleFunc("/ui-users", publicHTMLHandler(usersHTML))
+	mux.HandleFunc("/ui-api-docs", protectedHTMLHandler(cfg, apiDocsHTML))
+	mux.HandleFunc("/docs", docsRedirectHandler())
 	mux.HandleFunc("/login", loginHandler())
 	mux.HandleFunc("/api/routes", routesHandler())
+	mux.HandleFunc("/api/users/register", userRegisterHandler(cfg))
+	mux.HandleFunc("/api/users/login", userLoginHandler(cfg))
+	mux.Handle("/api/users/api-keys", requireUserAuth(cfg, userAPIKeysHandler(cfg)))
+	mux.Handle("/api/users/api-keys/", requireUserAuth(cfg, userAPIKeyItemHandler(cfg)))
+	mux.Handle("/api/stars/star", requireGatewayAuth(cfg, versionStarHandler(cfg, true)))
+	mux.Handle("/api/stars/unstar", requireGatewayAuth(cfg, versionStarHandler(cfg, false)))
 	mux.Handle("/api/dashboard/summary", requireGatewayAuth(cfg, dashboardSummaryHandler(cfg)))
 	mux.Handle("/api/agent/query", requireGatewayAuth(cfg, agentQueryHandler(cfg)))
 	mux.Handle("/auth/", xiaoGuGitProxy)
 	mux.Handle("/xg/", requireGatewayAuth(cfg, withStripPrefix("/xg", xiaoGuGitProxy)))
 	mux.Handle("/probability/", allowPublicHealth("/probability", probabilityProxy, requireGatewayAuth(cfg, probabilityProxy)))
-	mux.Handle("/", rootOrXiaoGuGitHandler(cfg, requireGatewayAuth(cfg, xiaoGuGitProxy)))
+	mux.Handle("/", rootOrXiaoGuGitHandler(cfg, xiaoGuGitProxy))
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -147,6 +209,7 @@ func loadConfig() Config {
 		XGAuthUsername: strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_USERNAME", getValue(values, "XG_AUTH_USERNAME", "mogong"))),
 		XGAuthCookie:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_COOKIE_NAME", getValue(values, "XG_AUTH_COOKIE_NAME", "xg_session"))),
 		AgentDir:       strings.TrimSpace(values["GATEWAY_AGENT_DIR"]),
+		MySQLDSN:       strings.TrimSpace(values["GATEWAY_MYSQL_DSN"]),
 	}
 }
 
@@ -233,6 +296,480 @@ func normalizeEnv(value string) string {
 	}
 }
 
+var userStore *UserStore
+
+type UserStore struct {
+	db *sql.DB
+}
+
+func initUserStore(cfg Config) (*UserStore, error) {
+	if strings.TrimSpace(cfg.MySQLDSN) == "" {
+		return nil, nil
+	}
+	db, err := sql.Open("mysql", cfg.MySQLDSN)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	store := &UserStore{db: db}
+	if err := store.migrate(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *UserStore) migrate(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS gateway_users (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			username VARCHAR(64) NOT NULL UNIQUE,
+			display_name VARCHAR(128) NOT NULL DEFAULT '',
+			password_hash VARCHAR(255) NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'active',
+			created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS gateway_api_keys (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			user_id BIGINT NOT NULL,
+			name VARCHAR(128) NOT NULL DEFAULT '',
+			key_prefix VARCHAR(32) NOT NULL,
+			key_hash CHAR(64) NOT NULL UNIQUE,
+			status VARCHAR(32) NOT NULL DEFAULT 'active',
+			last_used_at DATETIME(6) NULL,
+			created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			revoked_at DATETIME(6) NULL,
+			INDEX idx_gateway_api_keys_user_id (user_id),
+			INDEX idx_gateway_api_keys_status (status),
+			CONSTRAINT fk_gateway_api_keys_user FOREIGN KEY (user_id) REFERENCES gateway_users(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS gateway_version_stars (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			project_id VARCHAR(128) NOT NULL,
+			filename VARCHAR(255) NOT NULL,
+			version_id BIGINT NOT NULL,
+			user_id BIGINT NULL,
+			api_key_id BIGINT NULL,
+			voter_key VARCHAR(160) NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'active',
+			created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+			updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+			UNIQUE KEY uniq_gateway_version_stars_vote (project_id, filename, version_id, voter_key),
+			INDEX idx_gateway_version_stars_version (project_id, filename, version_id, status),
+			INDEX idx_gateway_version_stars_voter (voter_key)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *UserStore) createUser(ctx context.Context, req RegisterRequest) (map[string]any, string, error) {
+	username := normalizeUsername(req.Username)
+	if username == "" {
+		return nil, "", errors.New("username is required")
+	}
+	if len(req.Password) < 6 {
+		return nil, "", errors.New("password must be at least 6 characters")
+	}
+	passwordHash, err := hashPassword(req.Password)
+	if err != nil {
+		return nil, "", err
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = username
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO gateway_users (username, display_name, password_hash, status) VALUES (?, ?, ?, 'active')`,
+		username,
+		displayName,
+		passwordHash,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	userID, err := result.LastInsertId()
+	if err != nil {
+		return nil, "", err
+	}
+	apiKey, apiKeyRow, err := s.createAPIKey(ctx, userID, "default")
+	if err != nil {
+		return nil, "", err
+	}
+	return map[string]any{
+		"id":           userID,
+		"username":     username,
+		"display_name": displayName,
+		"api_key":      apiKeyRow,
+	}, apiKey, nil
+}
+
+func (s *UserStore) login(ctx context.Context, req LoginRequest) (int64, string, error) {
+	username := normalizeUsername(req.Username)
+	if username == "" || req.Password == "" {
+		return 0, "", errors.New("username and password are required")
+	}
+	var userID int64
+	var passwordHash, status string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, password_hash, status FROM gateway_users WHERE username = ?`,
+		username,
+	).Scan(&userID, &passwordHash, &status)
+	if err != nil {
+		return 0, "", err
+	}
+	if status != "active" || !verifyPassword(req.Password, passwordHash) {
+		return 0, "", errors.New("invalid credentials")
+	}
+	return userID, username, nil
+}
+
+func (s *UserStore) createAPIKey(ctx context.Context, userID int64, name string) (string, map[string]any, error) {
+	rawKey, err := generateAPIKey()
+	if err != nil {
+		return "", nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "default"
+	}
+	prefix := keyPrefix(rawKey)
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO gateway_api_keys (user_id, name, key_prefix, key_hash, status) VALUES (?, ?, ?, ?, 'active')`,
+		userID,
+		name,
+		prefix,
+		hashAPIKey(rawKey),
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	apiKeyID, err := result.LastInsertId()
+	if err != nil {
+		return "", nil, err
+	}
+	return rawKey, map[string]any{
+		"id":         apiKeyID,
+		"name":       name,
+		"key_prefix": prefix,
+		"status":     "active",
+	}, nil
+}
+
+func (s *UserStore) listAPIKeys(ctx context.Context, userID int64) ([]map[string]any, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, name, key_prefix, status, created_at, last_used_at, revoked_at
+		 FROM gateway_api_keys WHERE user_id = ? ORDER BY id DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []map[string]any{}
+	for rows.Next() {
+		var id int64
+		var name, prefix, status string
+		var createdAt time.Time
+		var lastUsedAt, revokedAt sql.NullTime
+		if err := rows.Scan(&id, &name, &prefix, &status, &createdAt, &lastUsedAt, &revokedAt); err != nil {
+			return nil, err
+		}
+		item := map[string]any{
+			"id":         id,
+			"name":       name,
+			"key_prefix": prefix,
+			"status":     status,
+			"created_at": createdAt.Format(time.RFC3339),
+		}
+		if lastUsedAt.Valid {
+			item["last_used_at"] = lastUsedAt.Time.Format(time.RFC3339)
+		}
+		if revokedAt.Valid {
+			item["revoked_at"] = revokedAt.Time.Format(time.RFC3339)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *UserStore) revokeAPIKey(ctx context.Context, userID, apiKeyID int64) (bool, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE gateway_api_keys SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP(6)
+		 WHERE id = ? AND user_id = ? AND status = 'active'`,
+		apiKeyID,
+		userID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (s *UserStore) authenticateAPIKey(ctx context.Context, apiKey string) (*AuthPrincipal, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, sql.ErrNoRows
+	}
+	var principal AuthPrincipal
+	var status string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT k.id, k.user_id, u.username, k.status
+		 FROM gateway_api_keys k
+		 JOIN gateway_users u ON u.id = k.user_id
+		 WHERE k.key_hash = ? AND u.status = 'active'`,
+		hashAPIKey(apiKey),
+	).Scan(&principal.APIKeyID, &principal.UserID, &principal.Username, &status)
+	if err != nil {
+		return nil, err
+	}
+	if status != "active" {
+		return nil, sql.ErrNoRows
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE gateway_api_keys SET last_used_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, principal.APIKeyID)
+	principal.Kind = "api_key"
+	return &principal, nil
+}
+
+func (s *UserStore) setVersionStar(ctx context.Context, req StarRequest, principal *AuthPrincipal, voterKey string, active bool) (bool, string, error) {
+	if voterKey == "" {
+		return false, "", errors.New("missing voter identity")
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return false, "", err
+	}
+	defer tx.Rollback()
+
+	if active {
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT IGNORE INTO gateway_version_stars
+				(project_id, filename, version_id, user_id, api_key_id, voter_key, status)
+			 VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+			req.ProjectID,
+			req.Filename,
+			req.VersionID,
+			nullableInt64(principalUserID(principal)),
+			nullableInt64(principalAPIKeyID(principal)),
+			voterKey,
+		)
+		if err != nil {
+			return false, "", err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return false, "", err
+		}
+		if affected > 0 {
+			if err := tx.Commit(); err != nil {
+				return false, "", err
+			}
+			return true, "starred", nil
+		}
+
+		var status string
+		err = tx.QueryRowContext(
+			ctx,
+			`SELECT status FROM gateway_version_stars
+			 WHERE project_id = ? AND filename = ? AND version_id = ? AND voter_key = ?
+			 FOR UPDATE`,
+			req.ProjectID,
+			req.Filename,
+			req.VersionID,
+			voterKey,
+		).Scan(&status)
+		if err != nil {
+			return false, "", err
+		}
+		if status == "active" {
+			if err := tx.Commit(); err != nil {
+				return false, "", err
+			}
+			return false, "already_starred", nil
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE gateway_version_stars
+			 SET status = 'active', user_id = ?, api_key_id = ?
+			 WHERE project_id = ? AND filename = ? AND version_id = ? AND voter_key = ?`,
+			nullableInt64(principalUserID(principal)),
+			nullableInt64(principalAPIKeyID(principal)),
+			req.ProjectID,
+			req.Filename,
+			req.VersionID,
+			voterKey,
+		); err != nil {
+			return false, "", err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, "", err
+		}
+		return true, "starred", nil
+	}
+
+	var status string
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT status FROM gateway_version_stars
+		 WHERE project_id = ? AND filename = ? AND version_id = ? AND voter_key = ?
+		 FOR UPDATE`,
+		req.ProjectID,
+		req.Filename,
+		req.VersionID,
+		voterKey,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return false, "", err
+		}
+		return false, "already_unstarred", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if status != "active" {
+		if err := tx.Commit(); err != nil {
+			return false, "", err
+		}
+		return false, "already_unstarred", nil
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE gateway_version_stars
+		 SET status = 'revoked', user_id = ?, api_key_id = ?
+		 WHERE project_id = ? AND filename = ? AND version_id = ? AND voter_key = ?`,
+		nullableInt64(principalUserID(principal)),
+		nullableInt64(principalAPIKeyID(principal)),
+		req.ProjectID,
+		req.Filename,
+		req.VersionID,
+		voterKey,
+	); err != nil {
+		return false, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, "", err
+	}
+	return true, "unstarred", nil
+}
+
+func (s *UserStore) forceVersionStarStatus(ctx context.Context, req StarRequest, voterKey, status string) error {
+	if voterKey == "" || status == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE gateway_version_stars
+		 SET status = ?
+		 WHERE project_id = ? AND filename = ? AND version_id = ? AND voter_key = ?`,
+		status,
+		req.ProjectID,
+		req.Filename,
+		req.VersionID,
+		voterKey,
+	)
+	return err
+}
+
+func normalizeUsername(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func generateAPIKey() (string, error) {
+	randomBytes := make([]byte, 24)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	return "xgk_" + hex.EncodeToString(randomBytes), nil
+}
+
+func keyPrefix(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if len(apiKey) <= 12 {
+		return apiKey
+	}
+	return apiKey[:12]
+}
+
+func hashAPIKey(apiKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey)))
+	return hex.EncodeToString(sum[:])
+}
+
+func nullableInt64(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
+func principalUserID(principal *AuthPrincipal) int64 {
+	if principal == nil {
+		return 0
+	}
+	return principal.UserID
+}
+
+func principalAPIKeyID(principal *AuthPrincipal) int64 {
+	if principal == nil {
+		return 0
+	}
+	return principal.APIKeyID
+}
+
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	saltHex := hex.EncodeToString(salt)
+	digest := passwordDigest(password, saltHex)
+	return "sha256$" + saltHex + "$" + digest, nil
+}
+
+func verifyPassword(password, stored string) bool {
+	parts := strings.Split(stored, "$")
+	if len(parts) != 3 || parts[0] != "sha256" {
+		return false
+	}
+	expected := passwordDigest(password, parts[1])
+	return hmac.Equal([]byte(expected), []byte(parts[2]))
+}
+
+func passwordDigest(password, saltHex string) string {
+	mac := hmac.New(sha256.New, []byte(saltHex))
+	mac.Write([]byte(password))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func rootHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -250,6 +787,8 @@ func rootHandler(cfg Config) http.HandlerFunc {
 				"service_call":       "curl -H \"X-API-Key: <key>\" /api/dashboard/summary",
 				"dashboard":          "/ui-dashboard",
 				"agent":              "/ui-agent",
+				"users":              "/ui-users",
+				"api_docs":           "/ui-api-docs",
 				"xiaogugit_health":   "/xg/health",
 				"probability_health": "/probability/health",
 				"probability_reason": "/probability/api/llm/probability-reason",
@@ -270,20 +809,64 @@ func routesHandler() http.HandlerFunc {
 
 func rootOrXiaoGuGitHandler(cfg Config, xiaoGuGitProxy http.Handler) http.Handler {
 	root := rootHandler(cfg)
+	protectedProxy := requireGatewayAuth(cfg, xiaoGuGitProxy)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			root.ServeHTTP(w, r)
 			return
 		}
-		xiaoGuGitProxy.ServeHTTP(w, r)
+		if isBrowserPagePath(r.URL.Path) && authenticateGatewayRequest(cfg, r) == nil {
+			redirectToLogin(w, r)
+			return
+		}
+		if isBrowserPagePath(r.URL.Path) {
+			xiaoGuGitProxy.ServeHTTP(w, r)
+			return
+		}
+		protectedProxy.ServeHTTP(w, r)
 	})
 }
 
-func dashboardHandler() http.HandlerFunc {
+func protectedHTMLHandler(cfg Config, html []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if authenticateGatewayRequest(cfg, r) == nil {
+			redirectToLogin(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(html)
+	}
+}
+
+func publicHTMLHandler(html []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(dashboardHTML)
+		_, _ = w.Write(html)
+	}
+}
+
+func redirectToLogin(w http.ResponseWriter, r *http.Request) {
+	next := r.URL.RequestURI()
+	if next == "" {
+		next = "/ui-dashboard"
+	}
+	http.Redirect(w, r, "/login?next="+url.QueryEscape(next), http.StatusFound)
+}
+
+func isBrowserPagePath(path string) bool {
+	switch path {
+	case "/ui", "/ui-visual", "/ui-modern", "/ui-visual-modern", "/docs", "/redoc":
+		return true
+	default:
+		return false
+	}
+}
+
+func docsRedirectHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui-api-docs", http.StatusFound)
 	}
 }
 
@@ -295,11 +878,248 @@ func loginHandler() http.HandlerFunc {
 	}
 }
 
-func agentPageHandler() http.HandlerFunc {
+func userRegisterHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(agentHTML)
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+			return
+		}
+		if userStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		var payload RegisterRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		user, apiKey, err := userStore.createUser(ctx, payload)
+		if err != nil {
+			log.Printf("user register failed: %v", err)
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		token := buildUserAccessToken(cfg, user["id"].(int64), fmt.Sprint(user["username"]))
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"status":          "success",
+			"user":            user,
+			"access_token":    token,
+			"xg_access_token": buildServiceAccessToken(cfg),
+			"api_key":         apiKey,
+			"api_key_note":    "API Key is only shown once. Store it securely.",
+		})
+	}
+}
+
+func userLoginHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+			return
+		}
+		if userStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		var payload LoginRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		userID, username, err := userStore.login(ctx, payload)
+		if err != nil {
+			log.Printf("user login failed for %s: %v", normalizeUsername(payload.Username), err)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":          "success",
+			"access_token":    buildUserAccessToken(cfg, userID, username),
+			"xg_access_token": buildServiceAccessToken(cfg),
+			"user": map[string]any{
+				"id":       userID,
+				"username": username,
+			},
+		})
+	}
+}
+
+func userAPIKeysHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal := principalFromContext(r.Context())
+		if principal == nil || principal.UserID <= 0 {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
+			return
+		}
+		if userStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		switch r.Method {
+		case http.MethodGet:
+			keys, err := userStore.listAPIKeys(ctx, principal.UserID)
+			if err != nil {
+				log.Printf("api key list failed user_id=%d: %v", principal.UserID, err)
+				writeJSON(w, http.StatusBadGateway, map[string]any{"detail": safeErrorDetail})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys})
+		case http.MethodPost:
+			var payload CreateAPIKeyRequest
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
+				return
+			}
+			apiKey, row, err := userStore.createAPIKey(ctx, principal.UserID, payload.Name)
+			if err != nil {
+				log.Printf("api key create failed user_id=%d: %v", principal.UserID, err)
+				writeJSON(w, http.StatusBadGateway, map[string]any{"detail": safeErrorDetail})
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]any{
+				"status":       "success",
+				"api_key":      apiKey,
+				"api_key_info": row,
+				"api_key_note": "API Key is only shown once. Store it securely.",
+			})
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+		}
+	}
+}
+
+func userAPIKeyItemHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal := principalFromContext(r.Context())
+		if principal == nil || principal.UserID <= 0 {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
+			return
+		}
+		if userStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		if r.Method != http.MethodDelete {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+			return
+		}
+		idText := strings.TrimPrefix(r.URL.Path, "/api/users/api-keys/")
+		apiKeyID, err := strconv.ParseInt(strings.Trim(idText, "/"), 10, 64)
+		if err != nil || apiKeyID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": "invalid api key id"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		revoked, err := userStore.revokeAPIKey(ctx, principal.UserID, apiKeyID)
+		if err != nil {
+			log.Printf("api key revoke failed user_id=%d api_key_id=%d: %v", principal.UserID, apiKeyID, err)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		if !revoked {
+			writeJSON(w, http.StatusNotFound, map[string]any{"detail": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "success", "revoked_api_key_id": apiKeyID})
+	}
+}
+
+func versionStarHandler(cfg Config, active bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+			return
+		}
+		if userStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+
+		var payload StarRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+		payload.ProjectID = strings.TrimSpace(payload.ProjectID)
+		payload.Filename = strings.TrimSpace(payload.Filename)
+		if payload.ProjectID == "" || payload.Filename == "" || payload.VersionID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": "project_id, filename and version_id are required"})
+			return
+		}
+
+		principal := principalFromContext(r.Context())
+		voterKey := voterKeyFromRequest(principal, r)
+		if voterKey == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		changed, action, err := userStore.setVersionStar(ctx, payload, principal, voterKey, active)
+		if err != nil {
+			log.Printf("gateway star vote failed project_id=%s filename=%s version_id=%d active=%t: %v", payload.ProjectID, payload.Filename, payload.VersionID, active, err)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"detail": safeErrorDetail})
+			return
+		}
+
+		var backendResult map[string]any
+		if changed {
+			targetPath := "/version-star"
+			targetPayload := map[string]any{
+				"project_id": payload.ProjectID,
+				"filename":   payload.Filename,
+				"version_id": payload.VersionID,
+				"increment":  1,
+			}
+			if !active {
+				targetPath = "/version-unstar"
+				targetPayload = map[string]any{
+					"project_id": payload.ProjectID,
+					"filename":   payload.Filename,
+					"version_id": payload.VersionID,
+					"decrement":  1,
+				}
+			}
+			if err := postJSON(ctx, cfg, cfg.XiaoGuGitURL+targetPath, r.Header, targetPayload, &backendResult); err != nil {
+				compensatingStatus := "revoked"
+				if !active {
+					compensatingStatus = "active"
+				}
+				if compensateErr := userStore.forceVersionStarStatus(context.Background(), payload, voterKey, compensatingStatus); compensateErr != nil {
+					log.Printf("gateway star compensation failed project_id=%s filename=%s version_id=%d action=%s: %v", payload.ProjectID, payload.Filename, payload.VersionID, action, compensateErr)
+				}
+				log.Printf("gateway star backend sync failed project_id=%s filename=%s version_id=%d action=%s: %v", payload.ProjectID, payload.Filename, payload.VersionID, action, err)
+				writeJSON(w, http.StatusBadGateway, map[string]any{"detail": safeErrorDetail})
+				return
+			}
+		} else {
+			detailURL := cfg.XiaoGuGitURL + "/version-detail/" + url.PathEscape(payload.ProjectID) + "/" + url.PathEscape(strconv.FormatInt(payload.VersionID, 10)) + "?filename=" + url.QueryEscape(payload.Filename)
+			if err := fetchJSON(ctx, cfg, http.MethodGet, detailURL, r.Header, &backendResult); err != nil {
+				log.Printf("gateway star detail refresh failed project_id=%s filename=%s version_id=%d action=%s: %v", payload.ProjectID, payload.Filename, payload.VersionID, action, err)
+				backendResult = map[string]any{}
+			}
+		}
+
+		stars := extractStars(backendResult)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "success",
+			"action":     action,
+			"changed":    changed,
+			"project_id": payload.ProjectID,
+			"filename":   payload.Filename,
+			"version_id": payload.VersionID,
+			"stars":      stars,
+			"backend":    backendResult,
+		})
 	}
 }
 
@@ -411,6 +1231,7 @@ func agentQueryHandler(cfg Config) http.HandlerFunc {
 		payload.Question = strings.TrimSpace(payload.Question)
 		payload.ProjectID = strings.TrimSpace(payload.ProjectID)
 		payload.Filename = strings.TrimSpace(payload.Filename)
+		payload.AuthAPIKey = requestAPIKey(r.Header)
 		if payload.Question == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"detail": "question is required",
@@ -489,6 +1310,8 @@ func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (
 	}
 	if strings.TrimSpace(cfg.ServiceAPIKey) != "" {
 		args = append(args, "--api-key", cfg.ServiceAPIKey)
+	} else if strings.TrimSpace(payload.AuthAPIKey) != "" {
+		args = append(args, "--api-key", payload.AuthAPIKey)
 	}
 	if payload.IncludeRaw {
 		args = append(args, "--include-raw")
@@ -618,6 +1441,34 @@ func fetchJSON(ctx context.Context, cfg Config, method, targetURL string, source
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func postJSON(ctx context.Context, cfg Config, targetURL string, sourceHeaders http.Header, payload any, out any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	applyDownstreamAuth(cfg, sourceHeaders, req.Header)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("backend returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func newReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	originalDirector := proxy.Director
@@ -645,6 +1496,33 @@ var globalConfig Config
 
 const safeErrorDetail = "请稍后重试"
 
+type principalContextKey struct{}
+
+func principalFromContext(ctx context.Context) *AuthPrincipal {
+	if ctx == nil {
+		return nil
+	}
+	principal, _ := ctx.Value(principalContextKey{}).(*AuthPrincipal)
+	return principal
+}
+
+func requestAPIKey(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	apiKey := strings.TrimSpace(headers.Get("X-API-Key"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(headers.Get("apikey"))
+	}
+	if apiKey == "" {
+		authorization := strings.TrimSpace(headers.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(authorization), "apikey ") {
+			apiKey = strings.TrimSpace(authorization[len("apikey "):])
+		}
+	}
+	return apiKey
+}
+
 func applyDownstreamAuth(cfg Config, sourceHeaders, targetHeaders http.Header) {
 	if sourceHeaders == nil || targetHeaders == nil {
 		return
@@ -670,20 +1548,27 @@ func applyDownstreamAuth(cfg Config, sourceHeaders, targetHeaders http.Header) {
 }
 
 func serviceAPIKeyMatches(cfg Config, sourceHeaders http.Header) bool {
-	if strings.TrimSpace(cfg.ServiceAPIKey) == "" || sourceHeaders == nil {
-		return false
+	return authenticateServiceAPIKey(context.Background(), cfg, sourceHeaders) != nil
+}
+
+func authenticateServiceAPIKey(ctx context.Context, cfg Config, sourceHeaders http.Header) *AuthPrincipal {
+	apiKey := requestAPIKey(sourceHeaders)
+	if apiKey == "" {
+		return nil
 	}
-	requestAPIKey := strings.TrimSpace(sourceHeaders.Get("X-API-Key"))
-	if requestAPIKey == "" {
-		requestAPIKey = strings.TrimSpace(sourceHeaders.Get("apikey"))
+	if strings.TrimSpace(cfg.ServiceAPIKey) != "" && hmac.Equal([]byte(apiKey), []byte(cfg.ServiceAPIKey)) {
+		return &AuthPrincipal{Kind: "static_api_key"}
 	}
-	if requestAPIKey == "" {
-		authorization := strings.TrimSpace(sourceHeaders.Get("Authorization"))
-		if strings.HasPrefix(strings.ToLower(authorization), "apikey ") {
-			requestAPIKey = strings.TrimSpace(authorization[len("apikey "):])
-		}
+	if userStore == nil {
+		return nil
 	}
-	return requestAPIKey != "" && hmac.Equal([]byte(requestAPIKey), []byte(cfg.ServiceAPIKey))
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	principal, err := userStore.authenticateAPIKey(lookupCtx, apiKey)
+	if err != nil {
+		return nil
+	}
+	return principal
 }
 
 func buildServiceAccessToken(cfg Config) string {
@@ -700,10 +1585,136 @@ func buildServiceAccessToken(cfg Config) string {
 	return payloadB64 + "." + fmt.Sprintf("%x", signature.Sum(nil))
 }
 
+func buildUserAccessToken(cfg Config, userID int64, username string) string {
+	if strings.TrimSpace(cfg.XGAuthSecret) == "" || userID <= 0 {
+		return ""
+	}
+	payloadJSON, _ := json.Marshal(map[string]any{
+		"type":     "gateway_user",
+		"user_id":  userID,
+		"username": strings.TrimSpace(username),
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+	})
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	signature := hmac.New(sha256.New, []byte(cfg.XGAuthSecret))
+	signature.Write([]byte(payloadB64))
+	return payloadB64 + "." + fmt.Sprintf("%x", signature.Sum(nil))
+}
+
+func authenticateUserBearer(cfg Config, authorization string) *AuthPrincipal {
+	authorization = strings.TrimSpace(authorization)
+	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		return nil
+	}
+	token := strings.TrimSpace(authorization[len("bearer "):])
+	payload, ok := verifySignedToken(cfg, token)
+	if !ok {
+		return nil
+	}
+	if fmt.Sprint(payload["type"]) != "gateway_user" {
+		return nil
+	}
+	userID, ok := numericClaim(payload["user_id"])
+	if !ok || userID <= 0 {
+		return nil
+	}
+	exp, ok := numericClaim(payload["exp"])
+	if ok && exp > 0 && time.Now().Unix() > exp {
+		return nil
+	}
+	return &AuthPrincipal{
+		Kind:     "user_bearer",
+		UserID:   userID,
+		Username: strings.TrimSpace(fmt.Sprint(payload["username"])),
+	}
+}
+
+func verifySignedToken(cfg Config, token string) (map[string]any, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" || !strings.Contains(token, ".") || strings.TrimSpace(cfg.XGAuthSecret) == "" {
+		return nil, false
+	}
+	payloadB64, signatureHex, ok := strings.Cut(token, ".")
+	if !ok || payloadB64 == "" || signatureHex == "" {
+		return nil, false
+	}
+
+	signature := hmac.New(sha256.New, []byte(cfg.XGAuthSecret))
+	signature.Write([]byte(payloadB64))
+	expectedSignature := fmt.Sprintf("%x", signature.Sum(nil))
+	if !hmac.Equal([]byte(signatureHex), []byte(expectedSignature)) {
+		return nil, false
+	}
+
+	payloadRaw, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	if err != nil {
+		return nil, false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+		return nil, false
+	}
+	return payload, true
+}
+
+func numericClaim(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	case json.Number:
+		result, err := typed.Int64()
+		return result, err == nil
+	case string:
+		result, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return result, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func extractStars(payload map[string]any) int64 {
+	if payload == nil {
+		return 0
+	}
+	candidates := []any{
+		payload["stars"],
+		payload["community_score"],
+	}
+	if version, ok := payload["version"].(map[string]any); ok {
+		candidates = append(candidates, version["stars"], version["community_score"])
+	}
+	if backend, ok := payload["backend"].(map[string]any); ok {
+		candidates = append(candidates, backend["stars"], backend["community_score"])
+	}
+	for _, candidate := range candidates {
+		if value, ok := numericClaim(candidate); ok {
+			return value
+		}
+	}
+	return 0
+}
+
 func requireGatewayAuth(cfg Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if gatewayRequestAuthenticated(cfg, r) {
-			next.ServeHTTP(w, r)
+		if principal := authenticateGatewayRequest(cfg, r); principal != nil {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"detail": "Unauthorized",
+		})
+	})
+}
+
+func requireUserAuth(cfg Config, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal := authenticateUserRequest(cfg, r)
+		if principal != nil && principal.UserID > 0 {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal)))
 			return
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]any{
@@ -724,21 +1735,72 @@ func allowPublicHealth(prefix string, publicNext, protectedNext http.Handler) ht
 }
 
 func gatewayRequestAuthenticated(cfg Config, r *http.Request) bool {
+	return authenticateGatewayRequest(cfg, r) != nil
+}
+
+func authenticateGatewayRequest(cfg Config, r *http.Request) *AuthPrincipal {
 	if r == nil {
-		return false
+		return nil
 	}
-	if serviceAPIKeyMatches(cfg, r.Header) {
-		return true
+	if principal := authenticateServiceAPIKey(r.Context(), cfg, r.Header); principal != nil {
+		return principal
+	}
+	if principal := authenticateUserBearer(cfg, r.Header.Get("Authorization")); principal != nil {
+		return principal
 	}
 	if gatewayBearerAuthenticated(cfg, r.Header.Get("Authorization")) {
-		return true
+		return &AuthPrincipal{Kind: "gateway_bearer", Username: cfg.XGAuthUsername}
 	}
 	if cfg.XGAuthCookie != "" {
 		if cookie, err := r.Cookie(cfg.XGAuthCookie); err == nil && gatewayTokenAuthenticated(cfg, cookie.Value) {
-			return true
+			return &AuthPrincipal{Kind: "gateway_cookie", Username: cfg.XGAuthUsername}
 		}
 	}
-	return false
+	return nil
+}
+
+func voterKeyFromRequest(principal *AuthPrincipal, r *http.Request) string {
+	if principal != nil {
+		if principal.APIKeyID > 0 {
+			return fmt.Sprintf("api_key:%d", principal.APIKeyID)
+		}
+		if principal.UserID > 0 {
+			return fmt.Sprintf("user:%d", principal.UserID)
+		}
+	}
+	if r == nil {
+		return ""
+	}
+	if apiKey := requestAPIKey(r.Header); apiKey != "" {
+		return "static_api_key:" + shortHash(apiKey)
+	}
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
+		return "authorization:" + shortHash(authorization)
+	}
+	if globalConfig.XGAuthCookie != "" {
+		if cookie, err := r.Cookie(globalConfig.XGAuthCookie); err == nil && strings.TrimSpace(cookie.Value) != "" {
+			return "cookie:" + shortHash(cookie.Value)
+		}
+	}
+	return ""
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:])[:24]
+}
+
+func authenticateUserRequest(cfg Config, r *http.Request) *AuthPrincipal {
+	if r == nil {
+		return nil
+	}
+	if principal := authenticateUserBearer(cfg, r.Header.Get("Authorization")); principal != nil {
+		return principal
+	}
+	if principal := authenticateServiceAPIKey(r.Context(), cfg, r.Header); principal != nil && principal.UserID > 0 {
+		return principal
+	}
+	return nil
 }
 
 func gatewayBearerAuthenticated(cfg Config, authorization string) bool {

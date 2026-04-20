@@ -28,8 +28,13 @@
 
     * { box-sizing: border-box; }
 
+    html {
+      height: 100%;
+    }
+
     body {
       margin: 0;
+      height: 100%;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -115,7 +120,9 @@
     .app-body {
       flex: 1;
       min-height: 0;
+      height: calc(100dvh - var(--header-h));
       display: flex;
+      overflow: hidden;
     }
 
     .sidebar {
@@ -124,10 +131,37 @@
       border-right: 1px solid var(--border);
       background: linear-gradient(180deg, rgba(15, 23, 36, 0.96), rgba(10, 15, 24, 0.96));
       padding: 18px;
-      overflow-y: auto;
+      height: 100%;
+      overflow-y: scroll;
+      overflow-x: hidden;
       display: flex;
       flex-direction: column;
       gap: 16px;
+      scrollbar-gutter: stable;
+    }
+
+    .sidebar::-webkit-scrollbar,
+    .main-view::-webkit-scrollbar,
+    .chain-stage-wrap::-webkit-scrollbar,
+    .result-box::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb,
+    .main-view::-webkit-scrollbar-thumb,
+    .chain-stage-wrap::-webkit-scrollbar-thumb,
+    .result-box::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      border: 2px solid rgba(8, 13, 22, 0.95);
+      background: rgba(79, 140, 255, 0.36);
+    }
+
+    .sidebar::-webkit-scrollbar-track,
+    .main-view::-webkit-scrollbar-track,
+    .chain-stage-wrap::-webkit-scrollbar-track,
+    .result-box::-webkit-scrollbar-track {
+      background: rgba(8, 13, 22, 0.62);
     }
 
     .panel {
@@ -196,7 +230,10 @@
       flex-direction: column;
       padding: 20px;
       gap: 16px;
-      overflow: hidden;
+      height: 100%;
+      overflow-y: scroll;
+      overflow-x: hidden;
+      scrollbar-gutter: stable;
     }
 
     .hero {
@@ -221,11 +258,12 @@
     }
 
     .workspace {
-      flex: 1;
-      min-height: 0;
+      flex: none;
+      min-height: auto;
       display: grid;
       grid-template-columns: minmax(340px, 420px) minmax(500px, 1fr);
       gap: 16px;
+      align-items: start;
     }
 
     .query-panel,
@@ -473,15 +511,29 @@
     }
 
     @media (max-width: 900px) {
-      body { overflow: auto; }
-      .app-body { flex-direction: column; }
+      html,
+      body {
+        height: auto;
+        overflow: auto;
+      }
+      .app-body {
+        height: auto;
+        overflow: visible;
+        flex-direction: column;
+      }
       .sidebar {
         width: 100%;
         min-width: 0;
         border-right: none;
         border-bottom: 1px solid var(--border);
+        height: auto;
+        overflow: visible;
       }
-      .main-view { padding: 14px; }
+      .main-view {
+        height: auto;
+        padding: 14px;
+        overflow: visible;
+      }
       .chain-stage-wrap { grid-template-columns: 1fr; }
       .form-grid { grid-template-columns: 1fr; }
     }
@@ -497,6 +549,7 @@
       <div class="chip">DMXAPI Planner</div>
       <div class="chip">Gateway Tool Calls</div>
       <div class="chip">Redis-Backed Recommendation Reads</div>
+      <a class="nav-link" href="/ui-users">用户与 API Key</a>
       <a class="nav-link" href="/ui-dashboard">返回中台总览</a>
       <a class="nav-link" href="/ui-visual">返回版本图谱</a>
     </div>
@@ -526,32 +579,32 @@
         <div class="panel-header">查询能力</div>
         <div class="panel-body stack">
           <div class="tool-card">
-            <div class="tool-name">get_community_top_version</div>
+            <div class="tool-name">student.json 当前社区星标最高的版本是谁？</div>
             <div class="tool-desc">查询某个本体文件当前社区星标最高的版本。</div>
             <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
           </div>
           <div class="tool-card">
-            <div class="tool-name">get_official_recommendation</div>
+            <div class="tool-name">student.json 当前官方推荐版本是谁？</div>
             <div class="tool-desc">查询某个本体文件当前官方推荐的版本。</div>
             <div class="tool-schema">{"project_id":"demo","filename":"student.json"}</div>
           </div>
           <div class="tool-card">
-            <div class="tool-name">get_file_timeline</div>
+            <div class="tool-name">学校本体最近发生了哪些变化？</div>
             <div class="tool-desc">查询某个本体的版本时间线、最新版本和最近变化。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","limit":10}</div>
           </div>
           <div class="tool-card">
-            <div class="tool-name">get_version_content</div>
+            <div class="tool-name">查看学校本体版本 2 的内容。</div>
             <div class="tool-desc">读取某个本体当前工作区内容，或读取指定历史版本内容。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","version_id":2}</div>
           </div>
           <div class="tool-card">
-            <div class="tool-name">compare_versions</div>
+            <div class="tool-name">比较学校本体版本 2 和版本 4 的差异。</div>
             <div class="tool-desc">比较某个本体两个版本之间的 JSON 字段差异。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校","left_version_id":2,"right_version_id":4}</div>
           </div>
           <div class="tool-card">
-            <div class="tool-name">find_governance_gaps</div>
+            <div class="tool-name">检查学校本体还有哪些治理缺口。</div>
             <div class="tool-desc">扫描项目或单个本体的治理缺口，例如官方推荐缺失、官方社区分歧、概率缺失或偏低。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校"}</div>
           </div>
@@ -688,6 +741,23 @@
     const jsonOutput = document.getElementById("jsonOutput");
     const evidenceList = document.getElementById("evidenceList");
 
+    function getGatewayToken() {
+      return localStorage.getItem("gateway_user_access_token") || "";
+    }
+
+    function redirectToUserLogin() {
+      localStorage.removeItem("xg_access_token");
+      window.location.href = `/ui-users?next=${encodeURIComponent(window.location.pathname)}`;
+    }
+
+    function ensureAgentAuthenticated() {
+      if (!getGatewayToken()) {
+        redirectToUserLogin();
+        return false;
+      }
+      return true;
+    }
+
     const stages = {
       request: document.getElementById("requestStage"),
       planner: document.getElementById("plannerStage"),
@@ -771,13 +841,20 @@
       setStatus("正在执行 Agent。当前链路为：Gateway -> Python Agent -> Tool -> Gateway -> XiaoGuGit。");
 
       try {
+        const headers = { "Content-Type": "application/json" };
+        const token = getGatewayToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
         const response = await fetch("/api/agent/query", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
         });
 
         const result = await response.json();
+        if (response.status === 401) {
+          redirectToUserLogin();
+          return;
+        }
         if (!response.ok) {
           throw new Error(result.error || result.detail || `HTTP ${response.status}`);
         }
@@ -823,7 +900,9 @@
       }
     }
 
-    runBtn.addEventListener("click", runAgentQuery);
+    if (ensureAgentAuthenticated()) {
+      runBtn.addEventListener("click", runAgentQuery);
+    }
     document.querySelectorAll("[data-question]").forEach((button) => {
       button.addEventListener("click", () => {
         questionInput.value = button.dataset.question || "";

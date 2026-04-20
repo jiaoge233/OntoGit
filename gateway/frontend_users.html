@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用户与 API Key 管理</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08111d;
+      --panel: rgba(14, 24, 38, 0.92);
+      --panel-2: rgba(8, 14, 22, 0.86);
+      --line: rgba(148, 163, 184, 0.18);
+      --text: #e7eef9;
+      --muted: #98a7be;
+      --brand: #38bdf8;
+      --brand-2: #67e8f9;
+      --ok: #34d399;
+      --danger: #fb7185;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 14% 0%, rgba(56, 189, 248, 0.2), transparent 30%),
+        radial-gradient(circle at 90% 12%, rgba(52, 211, 153, 0.12), transparent 26%),
+        linear-gradient(180deg, #08111d 0%, #0b1320 55%, #060b13 100%);
+    }
+    .page { max-width: 1380px; margin: 0 auto; padding: 24px; }
+    .hero, .panel {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: 0 24px 70px rgba(0,0,0,0.32);
+      backdrop-filter: blur(14px);
+    }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05);
+      color: #dbeafe;
+    }
+    h1, h2, h3 { margin: 0; }
+    h1 { margin-top: 12px; font-size: 34px; letter-spacing: 0.02em; }
+    p { color: #d4deed; line-height: 1.75; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+    .session-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .btn, .link-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 14px;
+      color: var(--text);
+      background: rgba(255,255,255,0.06);
+      cursor: pointer;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .btn.primary {
+      color: #042036;
+      background: linear-gradient(135deg, var(--brand-2), var(--brand));
+      border-color: transparent;
+      box-shadow: 0 14px 28px rgba(56, 189, 248, 0.22);
+    }
+    .btn.danger {
+      color: #ffe4e6;
+      border-color: rgba(251, 113, 133, 0.32);
+      background: rgba(251, 113, 133, 0.1);
+    }
+    .btn:disabled { opacity: 0.58; cursor: not-allowed; }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(340px, 0.9fr) minmax(520px, 1.4fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .panel { padding: 20px; }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .subtitle { color: var(--muted); font-size: 13px; line-height: 1.65; margin-top: 6px; }
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.03);
+    }
+    .tab {
+      border: none;
+      border-radius: 12px;
+      padding: 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-weight: 800;
+    }
+    .tab.active {
+      color: #042036;
+      background: linear-gradient(135deg, var(--brand-2), var(--brand));
+    }
+    form { display: grid; gap: 14px; }
+    label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: var(--text);
+      background: rgba(7, 12, 20, 0.95);
+      outline: none;
+      font-size: 14px;
+    }
+    input:focus {
+      border-color: rgba(56, 189, 248, 0.62);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+    }
+    .status {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: rgba(255,255,255,0.04);
+      line-height: 1.65;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .status.ok {
+      color: #d1fae5;
+      border-color: rgba(52, 211, 153, 0.24);
+      background: rgba(52, 211, 153, 0.1);
+    }
+    .status.error {
+      color: #ffe4e6;
+      border-color: rgba(251, 113, 133, 0.24);
+      background: rgba(251, 113, 133, 0.1);
+    }
+    .key-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      background: var(--panel-2);
+      display: grid;
+      gap: 10px;
+    }
+    .key-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .key-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      font-weight: 800;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .pill.ok {
+      color: #dcfce7;
+      border-color: rgba(52, 211, 153, 0.24);
+      background: rgba(52, 211, 153, 0.1);
+    }
+    .pill.warn {
+      color: #fef3c7;
+      border-color: rgba(251, 191, 36, 0.24);
+      background: rgba(251, 191, 36, 0.1);
+    }
+    .meta {
+      color: #b8cae4;
+      font-size: 12px;
+      line-height: 1.65;
+      word-break: break-word;
+    }
+    .secret-box {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(251, 191, 36, 0.24);
+      background: rgba(251, 191, 36, 0.08);
+    }
+    .secret-value {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(7, 12, 20, 0.92);
+      color: #fef3c7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-all;
+    }
+    .empty {
+      padding: 18px;
+      border: 1px dashed rgba(148, 163, 184, 0.22);
+      border-radius: 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+    @media (max-width: 980px) {
+      .hero { flex-direction: column; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div>
+        <div class="badge">Gateway Identity</div>
+        <h1>用户与 API Key 管理</h1>
+        <p>这里管理 gateway 自身的用户账号和服务调用 API Key。浏览器管理操作使用用户 Bearer token；外部系统调用推荐使用发放的 `X-API-Key`。</p>
+        <div class="session-row">
+          <div class="badge" id="sessionBadge">未登录</div>
+          <button class="btn" onclick="logoutUser()">退出登录</button>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="link-btn" href="/ui-dashboard">返回中台总览</a>
+      </div>
+    </section>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>账号入口</h2>
+            <div class="subtitle">注册会自动发放一个默认 API Key；登录后可继续创建和吊销 Key。</div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="tab active" id="loginTab" onclick="switchMode('login')">登录</button>
+          <button class="tab" id="registerTab" onclick="switchMode('register')">注册</button>
+        </div>
+
+        <form id="authForm">
+          <label>
+            用户名
+            <input id="username" autocomplete="username" placeholder="例如 alice">
+          </label>
+          <label id="displayNameLabel" hidden>
+            展示名
+            <input id="displayName" autocomplete="name" placeholder="例如 Alice">
+          </label>
+          <label>
+            密码
+            <input id="password" type="password" autocomplete="current-password" placeholder="至少 6 位">
+          </label>
+          <button class="btn primary" type="submit" id="authSubmit">登录</button>
+        </form>
+        <div class="status" id="authStatus">登录或注册后，可在右侧管理 API Key。</div>
+        <div id="newKeyBox" class="secret-box" hidden>
+          <strong>新 API Key 只显示一次</strong>
+          <div class="meta">请立即保存。刷新页面后无法再次查看明文。</div>
+          <div class="secret-value" id="newKeyValue"></div>
+          <div class="actions" style="margin-top: 10px;">
+            <button class="btn" onclick="copyNewKey()">复制 Key</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>API Key</h2>
+            <div class="subtitle">Key 明文不会存入数据库；列表只展示前缀、状态和时间。</div>
+          </div>
+          <button class="btn primary" onclick="loadKeys()">刷新</button>
+        </div>
+
+        <form id="keyForm" style="margin-bottom: 16px;">
+          <label>
+            新 Key 名称
+            <input id="keyName" placeholder="例如 demo-script">
+          </label>
+          <button class="btn primary" type="submit">发放新 API Key</button>
+        </form>
+
+        <div id="keyList" class="key-grid">
+          <div class="empty">登录后加载 API Key 列表。</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tokenKey = "gateway_user_access_token";
+    const userKey = "gateway_user_profile";
+    const nextPath = new URLSearchParams(window.location.search).get("next") || "";
+    let mode = "login";
+    let lastNewKey = "";
+
+    const authForm = document.getElementById("authForm");
+    const keyForm = document.getElementById("keyForm");
+    const authStatus = document.getElementById("authStatus");
+    const keyList = document.getElementById("keyList");
+    const newKeyBox = document.getElementById("newKeyBox");
+    const newKeyValue = document.getElementById("newKeyValue");
+    const sessionBadge = document.getElementById("sessionBadge");
+
+    function getToken() {
+      return localStorage.getItem(tokenKey) || "";
+    }
+
+    function setToken(token) {
+      if (token) localStorage.setItem(tokenKey, token);
+    }
+
+    function setStatus(element, text, kind = "") {
+      element.textContent = text;
+      element.className = "status";
+      if (kind) element.classList.add(kind);
+    }
+
+    function switchMode(nextMode) {
+      mode = nextMode;
+      document.getElementById("loginTab").classList.toggle("active", mode === "login");
+      document.getElementById("registerTab").classList.toggle("active", mode === "register");
+      document.getElementById("displayNameLabel").hidden = mode !== "register";
+      document.getElementById("authSubmit").textContent = mode === "login" ? "登录" : "注册并发放默认 Key";
+      setStatus(authStatus, mode === "login" ? "输入用户名密码登录。" : "注册成功后会返回默认 API Key，明文只显示一次。");
+    }
+
+    function updateSessionBadge() {
+      const profile = JSON.parse(localStorage.getItem(userKey) || "null");
+      if (getToken() && profile?.username) {
+        sessionBadge.textContent = `已登录：${profile.username}`;
+        sessionBadge.style.borderColor = "rgba(52, 211, 153, 0.28)";
+        sessionBadge.style.color = "#dcfce7";
+      } else {
+        sessionBadge.textContent = "未登录";
+        sessionBadge.style.borderColor = "rgba(148, 163, 184, 0.18)";
+        sessionBadge.style.color = "#dbeafe";
+      }
+    }
+
+    async function requestJSON(path, options = {}) {
+      const headers = { "Content-Type": "application/json; charset=utf-8", ...(options.headers || {}) };
+      const token = getToken();
+      if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(path, { ...options, headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+      return data;
+    }
+
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      newKeyBox.hidden = true;
+      const payload = {
+        username: document.getElementById("username").value.trim(),
+        password: document.getElementById("password").value
+      };
+      if (mode === "register") {
+        payload.display_name = document.getElementById("displayName").value.trim();
+      }
+      try {
+        const path = mode === "login" ? "/api/users/login" : "/api/users/register";
+        const data = await requestJSON(path, { method: "POST", body: JSON.stringify(payload), headers: {} });
+        setToken(data.access_token);
+        if (data.xg_access_token) localStorage.setItem("xg_access_token", data.xg_access_token);
+        localStorage.setItem(userKey, JSON.stringify(data.user || { username: payload.username }));
+        updateSessionBadge();
+        setStatus(authStatus, mode === "login" ? "登录成功。" : "注册成功，默认 API Key 已发放。", "ok");
+        if (data.api_key) showNewKey(data.api_key);
+        await loadKeys();
+        if (mode === "login" && nextPath) {
+          window.location.href = nextPath;
+        }
+      } catch (error) {
+        setStatus(authStatus, error.message || "操作失败", "error");
+      }
+    });
+
+    keyForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = document.getElementById("keyName").value.trim();
+      try {
+        const data = await requestJSON("/api/users/api-keys", {
+          method: "POST",
+          body: JSON.stringify({ name })
+        });
+        showNewKey(data.api_key);
+        document.getElementById("keyName").value = "";
+        setStatus(authStatus, "新 API Key 已创建，请立即保存明文。", "ok");
+        await loadKeys();
+      } catch (error) {
+        setStatus(authStatus, error.message || "发放 API Key 失败", "error");
+      }
+    });
+
+    function showNewKey(apiKey) {
+      lastNewKey = apiKey || "";
+      newKeyValue.textContent = lastNewKey;
+      newKeyBox.hidden = !lastNewKey;
+    }
+
+    async function copyNewKey() {
+      if (!lastNewKey) return;
+      await navigator.clipboard.writeText(lastNewKey);
+      setStatus(authStatus, "API Key 已复制。", "ok");
+    }
+
+    async function loadKeys() {
+      if (!getToken()) {
+        keyList.innerHTML = `<div class="empty">请先登录或注册。</div>`;
+        return;
+      }
+      try {
+        const data = await requestJSON("/api/users/api-keys", { method: "GET" });
+        const keys = Array.isArray(data.api_keys) ? data.api_keys : [];
+        if (!keys.length) {
+          keyList.innerHTML = `<div class="empty">暂无 API Key。</div>`;
+          return;
+        }
+        keyList.innerHTML = keys.map((item) => `
+          <div class="key-card">
+            <div class="key-title">
+              <span>${escapeHTML(item.name || "unnamed")}</span>
+              <span class="pill ${item.status === "active" ? "ok" : "warn"}">${escapeHTML(item.status || "-")}</span>
+            </div>
+            <div class="meta">ID：${escapeHTML(item.id)} ｜ Prefix：${escapeHTML(item.key_prefix || "-")}</div>
+            <div class="meta">创建：${escapeHTML(item.created_at || "-")}</div>
+            <div class="meta">最后使用：${escapeHTML(item.last_used_at || "-")}</div>
+            ${item.revoked_at ? `<div class="meta">吊销：${escapeHTML(item.revoked_at)}</div>` : ""}
+            <div class="actions">
+              <button class="btn danger" ${item.status !== "active" ? "disabled" : ""} onclick="revokeKey(${Number(item.id)})">吊销</button>
+            </div>
+          </div>
+        `).join("");
+      } catch (error) {
+        keyList.innerHTML = `<div class="empty">加载失败：${escapeHTML(error.message || "未知错误")}</div>`;
+      }
+    }
+
+    async function revokeKey(id) {
+      if (!id) return;
+      if (!confirm(`确认吊销 API Key #${id}？吊销后无法恢复。`)) return;
+      try {
+        await requestJSON(`/api/users/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+        setStatus(authStatus, `API Key #${id} 已吊销。`, "ok");
+        await loadKeys();
+      } catch (error) {
+        setStatus(authStatus, error.message || "吊销失败", "error");
+      }
+    }
+
+    async function logoutUser() {
+      const xgToken = localStorage.getItem("xg_access_token") || "";
+      try {
+        await fetch("/auth/logout", {
+          method: "POST",
+          headers: xgToken ? { Authorization: `Bearer ${xgToken}` } : {},
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+      } catch (error) {
+        console.warn("xiaogugit logout failed", error);
+      }
+      localStorage.removeItem(tokenKey);
+      localStorage.removeItem(userKey);
+      localStorage.removeItem("xg_access_token");
+      lastNewKey = "";
+      newKeyBox.hidden = true;
+      updateSessionBadge();
+      keyList.innerHTML = `<div class="empty">登录后加载 API Key 列表。</div>`;
+      setStatus(authStatus, "已退出用户管理会话。");
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (m) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[m]));
+    }
+
+    updateSessionBadge();
+    loadKeys();
+  </script>
+</body>
+</html>

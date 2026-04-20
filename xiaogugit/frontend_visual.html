@@ -1031,8 +1031,8 @@
         );
         if (preview?.current) {
           setHoverPreviewCard(
-            `${filename} 路 V${model.versionId}`,
-            `current working copy 路 stars ${preview?.stars ?? 0}`,
+          `${filename} | V${model.versionId}`,
+          `current working copy | stars ${preview?.stars ?? 0}`,
             body
           );
         }
@@ -1105,6 +1105,29 @@
       return localStorage.getItem("xg_access_token") || "";
     }
 
+    async function ensureAuthenticatedPage() {
+      const gatewayToken = localStorage.getItem("gateway_user_access_token") || "";
+      if (!gatewayToken && window.location.port === "8080") {
+        localStorage.removeItem("xg_access_token");
+        window.location.href = `/ui-users?next=${encodeURIComponent(window.location.pathname)}`;
+        return false;
+      }
+      const token = getAccessToken();
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const response = await fetch("/auth/me", {
+        method: "GET",
+        headers,
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      if (response.status === 401) {
+        localStorage.removeItem("xg_access_token");
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        return false;
+      }
+      return response.ok;
+    }
+
     async function apiRequest(url, options = {}, timeoutMs = 15000) {
       const headers = new Headers(options.headers || {});
       const token = getAccessToken();
@@ -1139,10 +1162,12 @@
       const token = getAccessToken();
       await fetch("/auth/logout", {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "same-origin",
+        cache: "no-store"
       });
       localStorage.removeItem("xg_access_token");
-      window.location.href = "/login";
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
     }
 
     const apiGet = (url, timeoutMs = 15000) => apiRequest(url, {}, timeoutMs);
@@ -1568,6 +1593,24 @@
       }
     }
 
+    function formatStarsOperationStatus(result, versionId, delta) {
+      const stars = result?.stars ?? result?.backend?.stars ?? result?.backend?.version?.stars ?? 0;
+      const action = result?.action || "";
+      if (action === "already_starred") {
+        return `版本 ${versionId} 已经点过星，本次没有重复增加；当前 stars: ${stars}`;
+      }
+      if (action === "already_unstarred") {
+        return `版本 ${versionId} 当前没有你的星标，本次没有重复扣减；当前 stars: ${stars}`;
+      }
+      if (action === "starred" || (delta > 0 && result?.changed === true)) {
+        return `版本 ${versionId} 点星成功；当前 stars: ${stars}`;
+      }
+      if (action === "unstarred" || (delta < 0 && result?.changed === true)) {
+        return `版本 ${versionId} 取消星标成功；当前 stars: ${stars}`;
+      }
+      return `版本 ${versionId} 当前 stars: ${stars}`;
+    }
+
     async function changeSelectedStars(delta) {
       const pid = getVisualProjectId();
       const version = getVersionById(state.selectedVersionId);
@@ -1583,11 +1626,21 @@
       };
 
       try {
-        const result = delta > 0
-          ? await apiPost("/version-star", { ...payload, increment: delta })
-          : await apiPost("/version-unstar", { ...payload, decrement: Math.abs(delta) });
+        let result;
+        try {
+          result = delta > 0
+            ? await apiPost("/api/stars/star", payload)
+            : await apiPost("/api/stars/unstar", payload);
+        } catch (gatewayStarError) {
+          if (!String(gatewayStarError.message || gatewayStarError).includes("Not Found")) {
+            throw gatewayStarError;
+          }
+          result = delta > 0
+            ? await apiPost("/version-star", { ...payload, increment: delta })
+            : await apiPost("/version-unstar", { ...payload, decrement: Math.abs(delta) });
+        }
         logAction(result);
-        setVisualStatus(`版本 ${version.version_id} 当前 stars: ${result.stars}`, "ok");
+        setVisualStatus(formatStarsOperationStatus(result, version.version_id, delta), "ok");
         await refreshAllVisualizations();
         if (result.version_id !== undefined) await selectVersion(result.version_id);
       } catch (e) {
@@ -1677,7 +1730,19 @@
         else res = await apiPostQuery(`/rollback?project_id=${pid}&commit_id=${cid}`);
         logAction(res);
         document.getElementById("visual-project").value = pid;
+        if (res.filename) {
+          setFilenameWithoutExt("visual-file", res.filename);
+          setFilenameWithoutExt("read-file", res.filename);
+          invalidateHoverPreviewCache(res.filename);
+        }
         await refreshAllVisualizations();
+        const nextVersionId = res.rollback_created_version_id || res.current_version_id || res.version_id;
+        if (nextVersionId) {
+          await selectVersion(nextVersionId);
+        }
+        const targetVersionId = res.rolled_back_to_version_id || res.target_version_id || vid || cid;
+        const createdText = nextVersionId ? `，当前版本 V${nextVersionId}` : "";
+        setVisualStatus(`强制回滚成功：已回滚到 ${targetVersionId}${createdText}`, "ok");
       } catch(e) { logAction(`Rollback Error: ${e.message}`); }
     }
 
@@ -1731,7 +1796,9 @@
     }
 
     // Initialize layout behavior
-    window.addEventListener('DOMContentLoaded', () => {
+    window.addEventListener('DOMContentLoaded', async () => {
+      const authenticated = await ensureAuthenticatedPage();
+      if (!authenticated) return;
       ensureHoverPreviewUi();
     });
 

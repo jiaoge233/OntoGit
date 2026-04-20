@@ -639,6 +639,12 @@ class XiaoGuGitManager:
         self._write_json_file(file_path, current_data)
 
         repo.git.add(safe_filename)
+        logger.info(
+            "update-current-version-fields: staged fields project_id=%s filename=%s fields=%s",
+            project_id,
+            safe_filename,
+            sorted(fields.keys()),
+        )
         try:
             repo.git.diff("--cached", "--quiet", "--", safe_filename)
             has_staged_change = False
@@ -648,10 +654,17 @@ class XiaoGuGitManager:
         if has_staged_change:
             # Keep the same version number by amending the current commit instead of creating a new one.
             head_commit = repo.head.commit
+            old_commit_id = head_commit.hexsha
             author_name = head_commit.author.name or "System"
             author_email = head_commit.author.email or "system@local"
             committer_name = head_commit.committer.name or author_name
             committer_email = head_commit.committer.email or author_email
+            logger.info(
+                "update-current-version-fields: amending current commit project_id=%s filename=%s old_commit=%s",
+                project_id,
+                safe_filename,
+                old_commit_id,
+            )
             with repo.git.custom_environment(
                 GIT_AUTHOR_NAME=author_name,
                 GIT_AUTHOR_EMAIL=author_email,
@@ -663,8 +676,23 @@ class XiaoGuGitManager:
                     "--no-edit",
                     f"--author={author_name} <{author_email}>",
                 )
+            new_commit_id = repo.head.commit.hexsha
+            logger.info(
+                "update-current-version-fields: amended current commit project_id=%s filename=%s old_commit=%s new_commit=%s",
+                project_id,
+                safe_filename,
+                old_commit_id,
+                new_commit_id,
+            )
             self._refresh_file_cache(project_id, safe_filename)
             self._refresh_project_ontology_index(project_id)
+        else:
+            logger.info(
+                "update-current-version-fields: no staged change project_id=%s filename=%s fields=%s",
+                project_id,
+                safe_filename,
+                sorted(fields.keys()),
+            )
 
         return current_data
 
@@ -1352,12 +1380,24 @@ class XiaoGuGitManager:
                 basevision,
             )
 
+        created_version_id = result.get("version_id")
+        logger.info(
+            "rollback-version: project_id=%s filename=%s target_version=%s created_version=%s status=%s",
+            project_id,
+            safe_filename,
+            version["version_id"],
+            created_version_id,
+            result.get("status"),
+        )
         result.update(
             {
-                "version_id": version["version_id"],
+                "action": "rollback",
                 "filename": safe_filename,
+                "rollback_created_version_id": created_version_id,
+                "current_version_id": created_version_id,
                 "target_commit_id": version["commit_id"],
                 "target_version_id": version["version_id"],
+                "rolled_back_to_version_id": version["version_id"],
             }
         )
         return result

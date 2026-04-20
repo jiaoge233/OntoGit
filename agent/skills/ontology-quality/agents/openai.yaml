@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ontology Quality"
+  short_description: "Check probability and ontology JSON quality."
+  brand_color: "#F59E0B"
+  default_prompt: "Use $ontology-quality to inspect ontology probability fields and JSON quality."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Recommendation Track"
+  short_description: "Query official and community version tracks."
+  brand_color: "#36C7FF"
+  default_prompt: "Use $recommendation-track to compare official and community recommended ontology versions."
+policy:
+  allow_implicit_invocation: true

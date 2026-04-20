@@ -1,16 +1,22 @@
 FROM golang:1.24-alpine AS builder
 
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
+
 ENV CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \
-    GOTELEMETRY=off
+    GOTELEMETRY=off \
+    GOPROXY=${GOPROXY} \
+    GOSUMDB=${GOSUMDB}
 
 WORKDIR /src/gateway
 
 RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories
 
-COPY gateway/go.mod ./
-RUN go mod download
+COPY gateway/go.mod gateway/go.sum ./
+RUN go env -w GOPROXY="${GOPROXY}" GOSUMDB="${GOSUMDB}" \
+    && go mod download -x
 
 COPY gateway/ ./
 RUN go build -trimpath -ldflags="-s -w" -o /out/gateway .
@@ -18,13 +24,14 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/gateway .
 FROM alpine:3.20
 
 RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
-    && apk add --no-cache ca-certificates wget python3 py3-pip \
+    && apk add --no-cache ca-certificates wget python3 py3-pip tzdata \
     && ln -sf python3 /usr/bin/python
 
 WORKDIR /app
 
 ENV GATEWAY_ADDR=:8080 \
     GATEWAY_AGENT_DIR=/app/agent \
+    TZ=Asia/Shanghai \
     PYTHONIOENCODING=utf-8 \
     PYTHONUTF8=1
 

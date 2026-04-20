@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ontology Version"
+  short_description: "Query ontology timelines, content, and diffs."
+  brand_color: "#4F8CFF"
+  default_prompt: "Use $ontology-version to answer an ontology version history, content, or diff question through the data-infra gateway."
+policy:
+  allow_implicit_invocation: true

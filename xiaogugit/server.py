@@ -624,10 +624,24 @@ async def write_and_infer(req: WriteInferReq):
                 req.committer_name,
                 req.basevision,
             )
+            logger.info(
+                "write-and-infer: write_result project_id=%s filename=%s status=%s version_id=%s commit_id=%s",
+                req.project_id,
+                req.filename,
+                write_result.get("status"),
+                write_result.get("version_id"),
+                write_result.get("commit_id"),
+            )
             if write_result.get("status") != "success":
                 current_data = xg.read_version(req.project_id, req.filename)
                 if isinstance(current_data, dict) and not str(current_data.get("probability", "")).strip():
                     try:
+                        logger.info(
+                            "write-and-infer: current data missing probability, requesting inference project_id=%s filename=%s write_status=%s",
+                            req.project_id,
+                            req.filename,
+                            write_result.get("status"),
+                        )
                         inference_result = infer_probability_with_fallback()
                         logger.info(
                             "[DangGuInference] %s",
@@ -652,6 +666,14 @@ async def write_and_infer(req: WriteInferReq):
                             },
                         )
                         sync_amended_commit_id(write_result)
+                        logger.info(
+                            "write-and-infer: probability backfilled after no-change write project_id=%s filename=%s version_id=%s commit_id=%s probability=%s",
+                            req.project_id,
+                            req.filename,
+                            write_result.get("version_id"),
+                            write_result.get("commit_id"),
+                            inference_result.get("probability", ""),
+                        )
                         return {
                             "status": "success",
                             "write_result": write_result,
@@ -695,6 +717,12 @@ async def write_and_infer(req: WriteInferReq):
                 }
 
             try:
+                logger.info(
+                    "write-and-infer: requesting inference for new version project_id=%s filename=%s version_id=%s",
+                    req.project_id,
+                    req.filename,
+                    write_result.get("version_id"),
+                )
                 inference_result = infer_probability_with_fallback()
                 logger.info(
                     "[DangGuInference] %s",
@@ -719,6 +747,14 @@ async def write_and_infer(req: WriteInferReq):
                     },
                 )
                 sync_amended_commit_id(write_result)
+                logger.info(
+                    "write-and-infer: probability backfilled project_id=%s filename=%s version_id=%s commit_id=%s probability=%s",
+                    req.project_id,
+                    req.filename,
+                    write_result.get("version_id"),
+                    write_result.get("commit_id"),
+                    inference_result.get("probability", ""),
+                )
             except Exception as exc:
                 logger.warning(
                     "write-and-infer probability update failed: project_id=%s filename=%s error=%s",

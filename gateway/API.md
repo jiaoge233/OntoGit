@@ -159,3 +159,97 @@ Invoke-RestMethod `
   -Uri "http://127.0.0.1:8080/xg/version-recommend/official?project_id=demo&filename=student.json" `
   -Headers @{ "X-API-Key" = "change-me" }
 ```
+
+## Gateway 用户与 API Key
+
+用户与 API Key 由 gateway 自身管理，数据存储在 MySQL：
+
+- `gateway_users`：用户账号、展示名、密码哈希、状态。
+- `gateway_api_keys`：API Key 哈希、前缀、状态、最后使用时间。
+
+API Key 明文只在创建时返回一次，数据库只保存哈希。
+
+| 名称 | 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- | --- |
+| gateway_user_register | `POST` | `/api/users/register` | `none` | 注册用户，同时返回用户 token 和初始 API Key |
+| gateway_user_login | `POST` | `/api/users/login` | `none` | 用户名密码登录，返回用户 Bearer token |
+| gateway_user_api_keys_list | `GET` | `/api/users/api-keys` | `user bearer or user X-API-Key` | 列出当前用户的 API Key 元数据，不返回明文 |
+| gateway_user_api_keys_create | `POST` | `/api/users/api-keys` | `user bearer or user X-API-Key` | 为当前用户创建新 API Key，明文只返回一次 |
+| gateway_user_api_keys_revoke | `DELETE` | `/api/users/api-keys/{id}` | `user bearer or user X-API-Key` | 吊销当前用户拥有的 API Key |
+
+前端页面：
+
+```text
+GET /ui-users
+```
+
+该页面可完成用户注册、登录、API Key 发放、列表查看和吊销。
+
+注册示例：
+
+```powershell
+$body = @{
+  username = "alice"
+  password = "alice123456"
+  display_name = "Alice"
+} | ConvertTo-Json
+
+$resp = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8080/api/users/register" `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+
+$token = $resp.access_token
+$apiKey = $resp.api_key
+```
+
+发放新 API Key：
+
+```powershell
+$body = @{ name = "demo-script" } | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8080/api/users/api-keys" `
+  -Headers @{ Authorization = "Bearer $token" } `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+使用用户 API Key 调用受保护接口：
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri "http://127.0.0.1:8080/api/dashboard/summary" `
+  -Headers @{ "X-API-Key" = $apiKey }
+```
+
+## Gateway Idempotent Version Stars
+
+Gateway stores per-caller star votes in MySQL table `gateway_version_stars`.
+The unique key is `(project_id, filename, version_id, voter_key)`, so the same user/API key/browser session can only add one active star to the same version.
+Gateway only forwards to xiaogugit `/version-star` or `/version-unstar` when the stored vote state actually changes.
+
+| Name | Method | Path | Auth | Description |
+| --- | --- | --- | --- | --- |
+| gateway_version_star | `POST` | `/api/stars/star` | `browser session, bearer, or X-API-Key` | Idempotently star one ontology version. |
+| gateway_version_unstar | `POST` | `/api/stars/unstar` | `browser session, bearer, or X-API-Key` | Idempotently remove the current caller's star. |
+
+PowerShell example:
+
+```powershell
+$body = @{
+  project_id = "demo"
+  filename = "student.json"
+  version_id = 2
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8080/api/stars/star" `
+  -Headers @{ "X-API-Key" = $apiKey } `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```

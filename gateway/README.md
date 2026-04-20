@@ -1,4 +1,4 @@
-# Data Infra Gateway
+﻿# Data Infra Gateway
 
 `gateway` 是当前数据中台的统一入口层，负责：
 
@@ -222,3 +222,68 @@ Gateway 的 Docker 镜像现在会同时打包 `agent` 目录，并安装 `agent
 cd "C:\Users\gaozh\Desktop\data infra\gateway"
 docker compose up --build
 ```
+## 2026-04-20 用户与 API Key 管理
+
+Gateway 新增 MySQL 持久化用户体系：
+
+- `GET /ui-users`：用户注册、登录和 API Key 管理页面。
+- `POST /api/users/register`：注册用户，返回用户 Bearer token 和初始 API Key。
+- `POST /api/users/login`：用户登录，返回用户 Bearer token。
+- `GET /api/users/api-keys`：查看当前用户 API Key 元数据。
+- `POST /api/users/api-keys`：发放新的 API Key，明文只返回一次。
+- `DELETE /api/users/api-keys/{id}`：吊销指定 API Key。
+
+MySQL 配置：
+
+```env
+GATEWAY_MYSQL_DSN=root:123456@tcp(localhost:3306)/app?parseTime=true&charset=utf8mb4&loc=Local
+```
+
+本地和线上配置继续分离：
+
+- `gateway/.env.development`：默认连接 `localhost:3306`。
+- `gateway/.env.production`：默认连接 compose 内的 `mysql:3306`。
+
+Docker Compose 默认不再启动 MySQL，建议连接已经发布到宿主机 3306 的 MySQL 容器。
+## 2026-04-20 Idempotent Version Stars
+
+Gateway now owns the idempotency layer for version stars:
+
+- `gateway_version_stars` in MySQL stores one vote row per caller and version.
+- Unique key: `(project_id, filename, version_id, voter_key)`.
+- `POST /api/stars/star` activates the caller's vote. Repeated calls return `already_starred` and do not increment xiaogugit again.
+- `POST /api/stars/unstar` revokes the caller's vote. Repeated calls return `already_unstarred` and do not decrement xiaogugit again.
+- xiaogugit remains the source of the displayed aggregate `stars` count; gateway forwards only when the vote state changes.
+
+Request body:
+
+```json
+{
+  "project_id": "demo",
+  "filename": "student.json",
+  "version_id": 2
+}
+```
+
+## Docker MySQL
+
+Gateway compose does not start a MySQL container by default. It expects an existing MySQL service published on the host:
+
+```text
+mysql-container -> 0.0.0.0:3306->3306/tcp
+```
+
+When gateway runs in Docker, use:
+
+```env
+GATEWAY_MYSQL_DSN=root:123456@tcp(host.docker.internal:3306)/app?parseTime=true&charset=utf8mb4&loc=Local
+```
+
+When gateway runs directly on the host, use:
+
+```env
+GATEWAY_MYSQL_DSN=root:123456@tcp(localhost:3306)/app?parseTime=true&charset=utf8mb4&loc=Local
+```
+
+The target database `app` must already exist in MySQL, or MySQL must be configured to create it before gateway starts.
+

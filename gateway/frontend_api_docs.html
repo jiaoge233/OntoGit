@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gateway 接口目录</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08111d;
+      --panel: rgba(14, 24, 38, 0.9);
+      --line: rgba(148, 163, 184, 0.18);
+      --text: #e7eef9;
+      --muted: #9db0cc;
+      --brand: #38bdf8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(52, 211, 153, 0.1), transparent 28%),
+        linear-gradient(180deg, #08111d 0%, #07101b 100%);
+    }
+    .page { max-width: 1320px; margin: 0 auto; padding: 24px; }
+    .hero, .panel, .route-card {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel);
+      box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+    }
+    .hero { padding: 26px; margin-bottom: 18px; }
+    .hero-top { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    h1 { margin: 10px 0 8px; font-size: 32px; }
+    p { color: #cbd8ea; line-height: 1.7; }
+    .badge, .method {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.06);
+      padding: 5px 10px;
+      font-size: 12px;
+      color: #dbeafe;
+    }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+    .link-btn, button, input, select {
+      border-radius: 13px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 22, 0.86);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    .link-btn { text-decoration: none; display: inline-flex; }
+    button { cursor: pointer; }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr 180px 180px;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .route-card { padding: 16px; }
+    .route-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .method { font-weight: 800; color: #06111f; background: linear-gradient(135deg, #67e8f9, #38bdf8); border: none; }
+    .method.POST { background: linear-gradient(135deg, #86efac, #34d399); }
+    .method.DELETE { background: linear-gradient(135deg, #fda4af, #fb7185); }
+    .method.ANY { background: linear-gradient(135deg, #fde68a, #fbbf24); }
+    code {
+      color: #bfdbfe;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 8px;
+      padding: 2px 6px;
+    }
+    .meta { color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .empty { padding: 22px; color: var(--muted); text-align: center; border: 1px dashed var(--line); border-radius: 18px; }
+    @media (max-width: 900px) {
+      .toolbar, .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <span class="badge">Gateway API Catalog</span>
+          <h1>统一接口目录</h1>
+          <p>这里展示 gateway 当前对外暴露的接口。业务系统建议优先接入这些统一入口，不直接依赖 xiaogugit、probability 等模块端口。</p>
+        </div>
+        <div class="actions">
+          <a class="link-btn" href="/ui-dashboard">返回中台总览</a>
+          <a class="link-btn" href="/ui-visual">返回版本图谱</a>
+          <a class="link-btn" href="/ui-agent">Agent 查询台</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <input id="keyword" placeholder="搜索路径、名称、说明，例如 recommend / agent / probability">
+      <select id="module">
+        <option value="">全部模块</option>
+      </select>
+      <select id="method">
+        <option value="">全部方法</option>
+      </select>
+    </section>
+
+    <section id="routes" class="grid"></section>
+  </main>
+
+  <script>
+    const token = () => localStorage.getItem("xg_access_token") || "";
+    const state = { routes: [] };
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (m) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;",
+      }[m]));
+    }
+
+    async function loadRoutes() {
+      const headers = {};
+      if (token()) headers.Authorization = `Bearer ${token()}`;
+      const response = await fetch("/api/routes", { headers });
+      if (response.status === 401) {
+        localStorage.removeItem("xg_access_token");
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        return;
+      }
+      const data = await response.json();
+      state.routes = Array.isArray(data.routes) ? data.routes : [];
+      renderFilters();
+      renderRoutes();
+    }
+
+    function renderFilters() {
+      const modules = [...new Set(state.routes.map((item) => item.module).filter(Boolean))].sort();
+      const methods = [...new Set(state.routes.map((item) => item.method).filter(Boolean))].sort();
+      document.getElementById("module").innerHTML = `<option value="">全部模块</option>` + modules.map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
+      document.getElementById("method").innerHTML = `<option value="">全部方法</option>` + methods.map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
+    }
+
+    function renderRoutes() {
+      const keyword = document.getElementById("keyword").value.trim().toLowerCase();
+      const moduleValue = document.getElementById("module").value;
+      const methodValue = document.getElementById("method").value;
+      const rows = state.routes.filter((item) => {
+        const haystack = `${item.name} ${item.path} ${item.description} ${item.module} ${item.upstream || ""}`.toLowerCase();
+        return (!keyword || haystack.includes(keyword))
+          && (!moduleValue || item.module === moduleValue)
+          && (!methodValue || item.method === methodValue);
+      });
+      document.getElementById("routes").innerHTML = rows.length ? rows.map((item) => `
+        <article class="route-card">
+          <div class="route-head">
+            <span class="method ${esc(item.method)}">${esc(item.method)}</span>
+            <strong>${esc(item.name)}</strong>
+          </div>
+          <p><code>${esc(item.path)}</code></p>
+          <div class="meta">
+            模块：${esc(item.module)}${item.upstream ? ` / 上游：${esc(item.upstream)}` : ""}<br>
+            鉴权：${esc(item.auth)}<br>
+            说明：${esc(item.description)}
+          </div>
+        </article>
+      `).join("") : `<div class="empty">没有匹配的接口。</div>`;
+    }
+
+    document.getElementById("keyword").addEventListener("input", renderRoutes);
+    document.getElementById("module").addEventListener("change", renderRoutes);
+    document.getElementById("method").addEventListener("change", renderRoutes);
+    loadRoutes().catch((error) => {
+      document.getElementById("routes").innerHTML = `<div class="empty">接口目录加载失败：${esc(error.message || error)}</div>`;
+    });
+  </script>
+</body>
+</html>

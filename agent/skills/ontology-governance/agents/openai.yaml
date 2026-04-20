@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ontology Governance"
+  short_description: "Find ontology governance gaps and risks."
+  brand_color: "#10B981"
+  default_prompt: "Use $ontology-governance to inspect project or ontology governance gaps."
+policy:
+  allow_implicit_invocation: true

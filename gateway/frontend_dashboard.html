@@ -116,13 +116,41 @@
     .pill.info { color: #dbeafe; background: rgba(56, 189, 248, 0.14); border-color: rgba(56, 189, 248, 0.18); }
     .stack { display: flex; flex-direction: column; gap: 10px; }
     .modules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .page-index {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .index-card {
+      display: block;
+      min-height: 116px;
+      padding: 16px;
+      border: 1px solid rgba(96, 165, 250, 0.26);
+      border-radius: 18px;
+      color: var(--text);
+      text-decoration: none;
+      background:
+        linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(8, 14, 22, 0.88)),
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 32%);
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    }
+    .index-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(103, 232, 249, 0.62);
+      background:
+        linear-gradient(145deg, rgba(15, 23, 42, 0.98), rgba(8, 21, 32, 0.92)),
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.26), transparent 36%);
+    }
+    .index-card strong { display: block; font-size: 15px; margin-bottom: 10px; }
+    .index-card span { display: block; color: #a9bbd5; font-size: 12px; line-height: 1.55; }
     .status { margin-top: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); color: var(--muted); background: rgba(255,255,255,0.04); }
     .status.ok { color: #d1fae5; background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.2); }
     .status.error { color: #ffe4e6; background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.2); }
     .empty { padding: 18px; border-radius: 16px; border: 1px dashed rgba(148, 163, 184, 0.18); color: var(--muted); text-align: center; }
-    @media (max-width: 1260px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid-2, .grid-3, .lane, .modules { grid-template-columns: 1fr; } }
+    @media (max-width: 1260px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid-2, .grid-3, .lane, .modules { grid-template-columns: 1fr; } .page-index { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     @media (max-width: 720px) { .metrics { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 520px) { .metrics { grid-template-columns: 1fr; } }
+    @media (max-width: 520px) { .metrics, .page-index { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -142,18 +170,45 @@
           </div>
         </div>
         <div class="actions">
-          <a class="link-btn" href="/ui">版本治理</a>
-          <a class="link-btn" href="/ui-visual">版本图谱</a>
-          <a class="link-btn" href="/docs">接口文档</a>
-          <button class="btn" onclick="logout()">退出登录</button>
+          <a class="link-btn" href="/ui-users">用户与 API</a>
+          <a class="link-btn" href="/ui-agent">Agent</a>
+          <a class="link-btn" id="top-probability-link" href="http://127.0.0.1:3000/probability/">概率</a>
+          <a class="link-btn" href="/ui-visual">Git 可视化</a>
+          <a class="link-btn" href="/ui-api-docs">接口目录</a>
         </div>
       </div>
       <div class="toolbar">
         <div class="badge" id="selected-project-title">当前项目：-</div>
         <select id="project-select"></select>
         <button class="btn primary" onclick="refreshDashboard()">刷新总览</button>
-        <button class="btn" onclick="window.location.href='/ui-visual'">进入治理页</button>
       </div>
+    </section>
+
+    <section class="page-index" aria-label="Page index">
+      <a class="index-card" href="/ui-visual">
+        <strong>版本图谱工作台</strong>
+        <span>查看本体版本树、提交详情、强制回滚、官方推荐和社区星标。</span>
+      </a>
+      <a class="index-card" href="/ui">
+        <strong>单文件版本管理</strong>
+        <span>保留原有 xiaogugit 单文件写入、读取、diff 和版本操作入口。</span>
+      </a>
+      <a class="index-card" id="probability-link" href="http://127.0.0.1:3000/probability/">
+        <strong>概率判别</strong>
+        <span>只返回概率的本体真实性判别页面，不展示模型推理原因。</span>
+      </a>
+      <a class="index-card" id="probability-reason-link" href="http://127.0.0.1:3000/probability-reason/">
+        <strong>概率 + 原因</strong>
+        <span>用于调试和解释的概率判别页面，返回概率和简明原因。</span>
+      </a>
+      <a class="index-card" href="/ui-agent">
+        <strong>Agent 查询台</strong>
+        <span>自然语言查询版本库，调用 gateway tool 和 Redis 加速推荐读取。</span>
+      </a>
+      <a class="index-card" href="/ui-users">
+        <strong>用户与 API Key</strong>
+        <span>注册用户、登录、发放和吊销 API Key，用于服务调用鉴权。</span>
+      </a>
     </section>
 
     <section class="metrics" id="metrics"></section>
@@ -214,7 +269,8 @@
         <div class="modules">
           <div class="module-card"><strong>版本治理</strong><div class="meta">直接写版本、回滚、设官方推荐。</div><a class="link-btn" href="/ui">打开</a></div>
           <div class="module-card"><strong>图谱治理</strong><div class="meta">看版本树、悬停预览、双轨节点。</div><a class="link-btn" href="/ui-visual">打开</a></div>
-          <div class="module-card"><strong>接口文档</strong><div class="meta">联调聚合字段和后端 API。</div><a class="link-btn" href="/docs">打开</a></div>
+          <div class="module-card"><strong>用户与 API Key</strong><div class="meta">注册用户、发放和吊销服务调用 Key。</div><a class="link-btn" href="/ui-users">打开</a></div>
+          <div class="module-card"><strong>接口目录</strong><div class="meta">查看 gateway 统一收口后的接口、鉴权和上游模块。</div><a class="link-btn" href="/ui-api-docs">打开</a></div>
         </div>
       </div>
     </section>
@@ -481,7 +537,17 @@
         console.error(error);
         setStatus("中台总览刷新失败：请稍后重试", "error");
     */
+    function initPageIndexLinks() {
+      const probabilityBase = `${window.location.protocol}//${window.location.hostname}:3000`;
+      const topProbabilityLink = document.getElementById("top-probability-link");
+      const probabilityLink = document.getElementById("probability-link");
+      const probabilityReasonLink = document.getElementById("probability-reason-link");
+      if (topProbabilityLink) topProbabilityLink.href = `${probabilityBase}/probability/`;
+      if (probabilityLink) probabilityLink.href = `${probabilityBase}/probability/`;
+      if (probabilityReasonLink) probabilityReasonLink.href = `${probabilityBase}/probability-reason/`;
+    }
     document.addEventListener("DOMContentLoaded", async () => {
+      initPageIndexLinks();
       await refreshDashboard();
     });
   </script>
