@@ -171,6 +171,7 @@ func main() {
 	mux.HandleFunc("/api/routes", routesHandler())
 	mux.HandleFunc("/api/users/register", userRegisterHandler(cfg))
 	mux.HandleFunc("/api/users/login", userLoginHandler(cfg))
+	mux.HandleFunc("/api/users/logout", userLogoutHandler(cfg))
 	mux.Handle("/api/users/api-keys", requireUserAuth(cfg, userAPIKeysHandler(cfg)))
 	mux.Handle("/api/users/api-keys/", requireUserAuth(cfg, userAPIKeyItemHandler(cfg)))
 	mux.Handle("/api/stars/star", requireGatewayAuth(cfg, versionStarHandler(cfg, true)))
@@ -902,6 +903,7 @@ func userRegisterHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 		token := buildUserAccessToken(cfg, user["id"].(int64), fmt.Sprint(user["username"]))
+		setGatewaySessionCookie(w, cfg, buildServiceAccessToken(cfg))
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"status":          "success",
 			"user":            user,
@@ -936,6 +938,7 @@ func userLoginHandler(cfg Config) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
 			return
 		}
+		setGatewaySessionCookie(w, cfg, buildServiceAccessToken(cfg))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":          "success",
 			"access_token":    buildUserAccessToken(cfg, userID, username),
@@ -945,6 +948,17 @@ func userLoginHandler(cfg Config) http.HandlerFunc {
 				"username": username,
 			},
 		})
+	}
+}
+
+func userLogoutHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "method not allowed"})
+			return
+		}
+		clearGatewaySessionCookie(w, cfg)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "success"})
 	}
 }
 
@@ -1599,6 +1613,34 @@ func buildUserAccessToken(cfg Config, userID int64, username string) string {
 	signature := hmac.New(sha256.New, []byte(cfg.XGAuthSecret))
 	signature.Write([]byte(payloadB64))
 	return payloadB64 + "." + fmt.Sprintf("%x", signature.Sum(nil))
+}
+
+func setGatewaySessionCookie(w http.ResponseWriter, cfg Config, token string) {
+	if w == nil || strings.TrimSpace(cfg.XGAuthCookie) == "" || strings.TrimSpace(token) == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     cfg.XGAuthCookie,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int((24 * time.Hour).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearGatewaySessionCookie(w http.ResponseWriter, cfg Config) {
+	if w == nil || strings.TrimSpace(cfg.XGAuthCookie) == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     cfg.XGAuthCookie,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func authenticateUserBearer(cfg Config, authorization string) *AuthPrincipal {

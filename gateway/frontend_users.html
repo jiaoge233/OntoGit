@@ -488,6 +488,10 @@
     async function logoutUser() {
       const xgToken = localStorage.getItem("xg_access_token") || "";
       try {
+        await fetch("/api/users/logout", {
+          method: "POST",
+          credentials: "same-origin",
+        });
         await fetch("/auth/logout", {
           method: "POST",
           headers: xgToken ? { Authorization: `Bearer ${xgToken}` } : {},
