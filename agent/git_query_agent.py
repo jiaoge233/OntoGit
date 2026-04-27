@@ -139,6 +139,8 @@ def get_planner_prompt() -> str:
         "只有当用户明确提到了具体文件名，例如 student.json，才使用 filename。"
         "默认上下文里的 filename 只能作为弱提示，不能覆盖用户问题里提到的本体对象。"
         "中英文对象名视为同一个查询目标，例如 school 和 学校。"
+        "如果用户询问某个本体当前已有能力/关系是否合理、是否成立、是否需要拆分类别，优先选择 review_ontology_consistency。"
+        "如果用户明确询问新增某个属性/行为/能力是否合理、是否成立、应归为什么类别，优先选择 review_ontology_attribute。"
         "你只能输出一个 JSON 对象，不能输出 Markdown、解释或代码块。"
         '输出结构必须严格为 {"tool_name":"...","arguments":{...},"reason":"..."}。'
         '如果用户问题无法由当前 tools 回答，输出 {"tool_name":"none","arguments":{},"reason":"..."}。'
@@ -155,6 +157,10 @@ def get_answer_prompt() -> str:
         "请基于 tool 结果用简洁中文回答，不要编造结果中没有出现的信息。"
         "如果 tool_result 里有 ontology_name，就优先用本体名来回答，而不是只说文件名。"
         "优先给出结论，再补版本号、星标、时间等关键事实。"
+        "如果 tool_result 来自 review_ontology_attribute，应说明新增属性语义、是否合理、成立条件和建议新增类别。"
+        "如果 tool_result 来自 review_ontology_consistency，应按当前已有能力/关系逐项说明合理、条件成立或不建议成立，并汇总建议新增类别。"
+        "如果 tool_result 里有 logic_issues 且不为空，应优先说明发现的逻辑错误、严重级别和证据关系。"
+        "如果 infer_causal_logic 没有推出某些关系，不要断言这些关系不支持或无意义；只能说当前规则和当前证据链没有产生对应推导。"
         "你只能输出纯文本答案，不要输出 Markdown 代码块。"
     )
 

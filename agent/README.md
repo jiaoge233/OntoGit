@@ -465,3 +465,124 @@ Agent 本身不直接读写 Redis。它通过 Gateway 调用 `xiaogugit`，由 `
 - 本体名称解析优先走 Redis 索引。
 - Redis 不可用时自动回退到当前文件 / Git 扫描。
 
+## 2026-04-21 因果逻辑推理 Tool
+
+新增 `infer_causal_logic`，用于检索指定项目的当前本体关系图，合并输入的新本体，并基于确定性规则推导新的属性或关系。该工具只读版本库，不会写回本体文件。
+
+当前内置规则：
+
+- `父亲 + 父亲 => 爷爷`
+- `父亲 + 母亲 => 外公`
+- `母亲 + 父亲 => 奶奶`
+- `母亲 + 母亲 => 外婆`
+- `导致/造成/引起 + 导致/造成/引起 => 间接导致`
+- `影响/作用于 + 影响/作用于 => 间接影响`
+- `依赖/需要 + 依赖/需要 => 间接依赖`
+- `包含/包括/下辖 + 包含/包括/下辖 => 包含`
+- `属于/隶属于 + 属于/隶属于 => 属于`
+- `管理/管辖/负责 + 管理/管辖/负责 => 间接管理`
+- `父类/上位概念 + 父类/上位概念 => 上级`
+- `子类/下位概念 + 子类/下位概念 => 子类`
+- `位于/在 + 位于/在 => 位于`
+- `早于/先于 + 早于/先于 => 早于`
+- `晚于/后于 + 晚于/后于 => 晚于`
+
+典型输入：
+
+```json
+{
+  "project_id": "demo",
+  "new_ontology": {
+    "name": "C",
+    "interactions": []
+  }
+}
+```
+
+如果项目中已有 `A -> B` 的 `父亲` 关系，以及 `B -> C` 的 `父亲` 关系，工具会输出：
+
+```json
+{
+  "inferred_properties": [
+    {
+      "field": "爷爷",
+      "value": "A",
+      "direction": "incoming"
+    }
+  ],
+  "inferred_relations": [
+    {
+      "subject": "A",
+      "type": "爷爷",
+      "target": "C"
+    }
+  ]
+}
+```
+
+CLI 直调示例：
+
+```powershell
+python .\run_git_tool.py infer_causal_logic `
+  --project-id demo `
+  --ontology-json '{"name":"C","interactions":[]}' `
+  --base-url http://127.0.0.1:8080 `
+  --api-key local-gateway-key
+```
+
+自然语言 Agent 也可以选择该工具，例如：“项目 demo 里新增 C 本体后，能根据已有亲属关系推导出哪些新属性？”
+## 2026-04-22 新增属性合理性评估 Tool
+
+新增 `review_ontology_attribute`，用于评估“某个新增属性/行为/能力是否适合挂到当前本体上”。它不会写入版本库，只返回评估结果，适合后续接入 `/write` 或 `/write-and-infer` 的提交前治理。
+
+当前输出包括：
+- `subject_profile`：当前本体的主体画像，例如学生、警务相关人员、食品或物品。
+- `reviews[].semantic`：新增属性的语义类型，例如治安处置行为、学习行为、物品加工或物品属性。
+- `reviews[].compatibility`：新增属性和当前本体是否成立，状态包括 `accepted`、`conditional`、`rejected_suggestion`。
+- `reviews[].suggested_patch`：如果条件成立，给出建议类别和可选补丁。
+
+典型判断：
+- `学生 + 抓小偷` => `conditional`，建议类别为 `警校学生`、`见义勇为学生`、`治安志愿者`。
+- `苹果 + 抓小偷` => `rejected_suggestion`，因为食品或物品类主体不适合承载治安处置行为。
+
+PowerShell 直调示例：
+```powershell
+$current = @{
+  name = "学生"
+  abilities = @("学习", "完成作业")
+  interactions = @(@{ target = "学校"; type = "就读" })
+} | ConvertTo-Json -Depth 10
+
+$current | Set-Content -Path .\student_current.json -Encoding utf8
+
+python .\run_git_tool.py review_ontology_attribute `
+  --project-id demo `
+  --current-ontology-file .\student_current.json `
+  --attribute "抓小偷" `
+  --base-url http://127.0.0.1:8080 `
+  --api-key local-gateway-key
+```
+
+## 2026-04-22 当前本体一致性评估 Tool
+
+新增 `review_ontology_consistency`，用于评估当前本体已有 `abilities` 和 `interactions` 是否符合本体主体语义。它不要求传新增属性，适合回答：
+
+- `学生本体当前能力是否合理？如果不成立应该新增什么类别？`
+- `当前本体里哪些能力需要拆分类别？`
+- `这个本体的能力和关系是否混杂？`
+
+典型结果：
+- `学生 + 上课/学习/上学` => `accepted`。
+- `学生 + 抓小偷` => `rejected_suggestion`，因为它不是学生基础能力；建议拆成 `警校学生`、`见义勇为学生`、`治安志愿者`。
+- `老师 + 写作业` => `rejected_suggestion`，因为写作业是学生/学员基础行为，不是教师基础能力。
+- `家长 + 修汽车` => `rejected_suggestion`，因为修汽车是汽车维修主体的专业行为。
+- `苹果 + 抓小偷` => `rejected_suggestion`。
+
+PowerShell 直调示例：
+```powershell
+python .\run_git_tool.py review_ontology_consistency `
+  --project-id demo `
+  --ontology-name "学生" `
+  --base-url http://127.0.0.1:8080 `
+  --api-key local-gateway-key
+```

@@ -50,6 +50,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Right version ID for compare_versions.",
     )
     parser.add_argument(
+        "--ontology-json",
+        default="",
+        help="Inline JSON object for infer_causal_logic new_ontology.",
+    )
+    parser.add_argument(
+        "--current-ontology-json",
+        default="",
+        help="Inline current ontology JSON object for review_ontology_attribute.",
+    )
+    parser.add_argument(
+        "--current-ontology-file",
+        default="",
+        help="Path to current ontology JSON file for review_ontology_attribute.",
+    )
+    parser.add_argument(
+        "--proposed-ontology-json",
+        default="",
+        help="Inline proposed ontology JSON object for review_ontology_attribute.",
+    )
+    parser.add_argument(
+        "--proposed-ontology-file",
+        default="",
+        help="Path to proposed ontology JSON file for review_ontology_attribute.",
+    )
+    parser.add_argument(
+        "--attribute",
+        action="append",
+        default=[],
+        help="Added attribute text for review_ontology_attribute. Can be repeated.",
+    )
+    parser.add_argument(
+        "--attribute-json",
+        default="",
+        help="Inline JSON string/list/object for review_ontology_attribute added_attributes.",
+    )
+    parser.add_argument(
         "--base-url",
         help="Gateway base URL, for example http://127.0.0.1:8080.",
     )
@@ -89,6 +125,20 @@ def main() -> None:
             raise SystemExit("--username and --password must be provided together")
         client.login(args.username, args.password)
 
+    current_ontology = {}
+    if args.current_ontology_file:
+        with open(args.current_ontology_file, "r", encoding="utf-8") as handle:
+            current_ontology = json.load(handle)
+    elif args.current_ontology_json:
+        current_ontology = json.loads(args.current_ontology_json)
+
+    proposed_ontology = {}
+    if args.proposed_ontology_file:
+        with open(args.proposed_ontology_file, "r", encoding="utf-8") as handle:
+            proposed_ontology = json.load(handle)
+    elif args.proposed_ontology_json:
+        proposed_ontology = json.loads(args.proposed_ontology_json)
+
     result = run_tool(
         name=args.tool_name,
         arguments={
@@ -99,6 +149,10 @@ def main() -> None:
             "version_id": args.version_id,
             "left_version_id": args.left_version_id,
             "right_version_id": args.right_version_id,
+            "new_ontology": json.loads(args.ontology_json) if args.ontology_json else {},
+            "current_ontology": current_ontology,
+            "proposed_ontology": proposed_ontology,
+            "added_attributes": json.loads(args.attribute_json) if args.attribute_json else args.attribute,
         },
         client=client,
     )

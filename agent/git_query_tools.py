@@ -209,17 +209,37 @@ def resolve_ontology_filename(
         f"?project_id={quote(str(project_id).strip(), safe='')}"
         f"&query={quote(ontology_name, safe='')}"
     )
-    response = gateway_client.get_json(path)
-    candidate = response.get("candidate") or {}
-    resolved_filename = str(response.get("filename", "")).strip()
-    if not resolved_filename:
-        raise RuntimeError(f"ontology resolve returned empty filename for query {ontology_name}")
-    return resolved_filename, {
-        "mode": "ontology_name",
-        "input": ontology_name,
-        "matched_by": response.get("matched_by"),
-        "matched_candidate": candidate,
-    }
+    try:
+        response = gateway_client.get_json(path)
+        candidate = response.get("candidate") or {}
+        resolved_filename = str(response.get("filename", "")).strip()
+        if not resolved_filename:
+            raise RuntimeError(f"ontology resolve returned empty filename for query {ontology_name}")
+        return resolved_filename, {
+            "mode": "ontology_name",
+            "input": ontology_name,
+            "matched_by": response.get("matched_by"),
+            "matched_candidate": candidate,
+        }
+    except Exception as exc:
+        resolve_error = str(exc)
+
+    query_aliases = _expand_lookup_aliases(ontology_name)
+    for candidate in list_project_ontology_candidates(str(project_id).strip(), client=gateway_client):
+        candidate_values = set()
+        candidate_values.update(_expand_lookup_aliases(str(candidate.get("filename", ""))))
+        candidate_values.update(_expand_lookup_aliases(str(candidate.get("filename_stem", ""))))
+        candidate_values.update(_expand_lookup_aliases(str(candidate.get("ontology_name", ""))))
+        if query_aliases & candidate_values:
+            return str(candidate["filename"]).strip(), {
+                "mode": "ontology_name_fallback_scan",
+                "input": ontology_name,
+                "matched_by": "fallback_scan",
+                "matched_candidate": candidate,
+                "resolve_error": resolve_error,
+            }
+
+    raise RuntimeError(f"ontology resolve failed for query {ontology_name}: {resolve_error}")
 
 
 COMMUNITY_TOP_VERSION_TOOL = ToolDefinition(
@@ -317,6 +337,70 @@ FIND_GOVERNANCE_GAPS_TOOL = ToolDefinition(
     },
 )
 
+INFER_CAUSAL_LOGIC_TOOL = ToolDefinition(
+    name="infer_causal_logic",
+    description="检索指定项目中的本体关系图，合并输入的新本体，基于规则推导新的逻辑属性或关系。例如 A 是 B 的父亲、B 是 C 的父亲，可推导 A 是 C 的爷爷。",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "project_id": {"type": "string", "description": "项目 ID，例如 demo。"},
+            "new_ontology": {
+                "type": "object",
+                "description": "新本体 JSON，例如 {\"name\":\"C\",\"interactions\":[{\"target\":\"B\",\"type\":\"父亲\"}]}。若和库内同名，则用于覆盖当前库内该本体参与推理。",
+            },
+            "filename": {"type": "string", "description": "可选：如果未直接提供 new_ontology，可从当前项目读取该本体文件。"},
+            "ontology_name": {"type": "string", "description": "可选：如果未直接提供 new_ontology，可用本体名解析并读取。"},
+        },
+        "required": ["project_id"],
+        "additionalProperties": False,
+    },
+)
+
+REVIEW_ONTOLOGY_ATTRIBUTE_TOOL = ToolDefinition(
+    name="review_ontology_attribute",
+    description="评估新增属性是否适合挂到某个本体上，并给出语义类型、兼容性判断、建议新增类别和可选补丁。例如 学生 + 抓小偷 => 条件成立，可建议 警校学生 或 见义勇为学生。",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "project_id": {"type": "string", "description": "项目 ID，例如 demo。"},
+            "filename": {"type": "string", "description": "本体文件名，例如 student.json。可选。"},
+            "ontology_name": {"type": "string", "description": "本体名称或对象名，例如 学生。可选。"},
+            "current_ontology": {
+                "type": "object",
+                "description": "可选：当前本体 JSON。若提供则不读取项目当前版本。",
+            },
+            "proposed_ontology": {
+                "type": "object",
+                "description": "可选：修改后的完整本体 JSON。工具会和当前本体 diff，自动识别新增属性。",
+            },
+            "added_attributes": {
+                "description": "可选：直接指定新增属性。可以是字符串、字符串数组或属性对象数组。",
+            },
+        },
+        "required": ["project_id"],
+        "additionalProperties": False,
+    },
+)
+
+REVIEW_ONTOLOGY_CONSISTENCY_TOOL = ToolDefinition(
+    name="review_ontology_consistency",
+    description="评估某个本体当前已有能力和关系是否符合本体主体语义，并给出不成立或条件成立时建议新增的类别。例如学生本体已有抓小偷能力，可建议警校学生或见义勇为学生。",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "project_id": {"type": "string", "description": "项目 ID，例如 demo。"},
+            "filename": {"type": "string", "description": "本体文件名，例如 student.json。可选。"},
+            "ontology_name": {"type": "string", "description": "本体名称或对象名，例如 学生。可选。"},
+            "current_ontology": {
+                "type": "object",
+                "description": "可选：当前本体 JSON。若提供则不读取项目当前版本。",
+            },
+        },
+        "required": ["project_id"],
+        "additionalProperties": False,
+    },
+)
+
 
 def _parse_probability_score(value: Any) -> float | None:
     if value is None:
@@ -353,6 +437,1174 @@ def _gap(
         "suggestion": suggestion,
         "evidence": evidence or {},
     }
+
+
+def _as_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_logic_value(value: Any) -> str:
+    return _normalize_lookup_value(_as_text(value))
+
+
+FATHER_RELATIONS = {"父亲", "爸爸", "父", "father", "dad"}
+MOTHER_RELATIONS = {"母亲", "妈妈", "母", "mother", "mom"}
+SON_RELATIONS = {"儿子", "子", "son"}
+DAUGHTER_RELATIONS = {"女儿", "daughter"}
+
+TRANSITIVE_RELATION_GROUPS = [
+    {
+        "aliases": {"导致", "造成", "引起", "触发", "cause", "causes", "leadsto", "leads_to"},
+        "inferred_type": "间接导致",
+        "rule_id": "transitive_cause",
+    },
+    {
+        "aliases": {"影响", "作用于", "影响到", "affect", "affects", "influence", "influences"},
+        "inferred_type": "间接影响",
+        "rule_id": "transitive_influence",
+    },
+    {
+        "aliases": {"依赖", "依赖于", "需要", "依靠", "dependson", "depends_on", "requires"},
+        "inferred_type": "间接依赖",
+        "rule_id": "transitive_dependency",
+    },
+    {
+        "aliases": {"包含", "包括", "下辖", "拥有", "contain", "contains", "include", "includes", "has"},
+        "inferred_type": "包含",
+        "rule_id": "transitive_contains",
+    },
+    {
+        "aliases": {"属于", "隶属于", "归属于", "memberof", "member_of", "belongsto", "belongs_to"},
+        "inferred_type": "属于",
+        "rule_id": "transitive_belongs_to",
+    },
+    {
+        "aliases": {"管理", "管辖", "监管", "负责", "manage", "manages", "supervise", "supervises"},
+        "inferred_type": "间接管理",
+        "rule_id": "transitive_management",
+    },
+    {
+        "aliases": {"上级", "父类", "上位概念", "superclass", "parentclass", "parent_class"},
+        "inferred_type": "上级",
+        "rule_id": "transitive_superclass",
+    },
+    {
+        "aliases": {"子类", "下位概念", "subclass", "childclass", "child_class"},
+        "inferred_type": "子类",
+        "rule_id": "transitive_subclass",
+    },
+    {
+        "aliases": {"位于", "在", "locatedin", "located_in", "in"},
+        "inferred_type": "位于",
+        "rule_id": "transitive_location",
+    },
+    {
+        "aliases": {"早于", "先于", "前置于", "before", "precedes"},
+        "inferred_type": "早于",
+        "rule_id": "transitive_before",
+    },
+    {
+        "aliases": {"晚于", "后于", "after", "follows"},
+        "inferred_type": "晚于",
+        "rule_id": "transitive_after",
+    },
+]
+
+TRANSITIVE_RELATION_INDEX: dict[str, dict[str, str]] = {}
+for group in TRANSITIVE_RELATION_GROUPS:
+    for alias in group["aliases"]:
+        TRANSITIVE_RELATION_INDEX[_normalize_lookup_value(alias)] = {
+            "inferred_type": group["inferred_type"],
+            "rule_id": group["rule_id"],
+        }
+
+
+PROPERTY_RELATION_ALIASES = {
+    "属性",
+    "性质",
+    "特征",
+    "特点",
+    "味道",
+    "口味",
+    "颜色",
+    "状态",
+    "是",
+    "具有",
+    "has_property",
+    "property",
+    "taste",
+    "color",
+    "is",
+}
+
+MADE_INTO_RELATION_ALIASES = {
+    "制成",
+    "做成",
+    "加工成",
+    "榨成",
+    "磨成",
+    "变成",
+    "生产出",
+    "生成",
+    "酿成",
+    "made_into",
+    "processed_into",
+    "turns_into",
+}
+
+MADE_FROM_RELATION_ALIASES = {
+    "由制成",
+    "由...制成",
+    "来源于",
+    "来自",
+    "原料是",
+    "以为原料",
+    "以...为原料",
+    "made_from",
+    "processed_from",
+    "source_is",
+}
+
+PROPERTY_RELATION_TYPES = {_normalize_lookup_value(item) for item in PROPERTY_RELATION_ALIASES}
+MADE_INTO_RELATION_TYPES = {_normalize_lookup_value(item) for item in MADE_INTO_RELATION_ALIASES}
+MADE_FROM_RELATION_TYPES = {_normalize_lookup_value(item) for item in MADE_FROM_RELATION_ALIASES}
+SINGLE_VALUE_PROPERTY_TYPES = {
+    _normalize_lookup_value(item)
+    for item in {"味道", "口味", "颜色", "状态", "taste", "color", "status"}
+}
+SUSPICIOUS_BIDIRECTIONAL_RULE_IDS = {
+    "transitive_contains",
+    "transitive_belongs_to",
+    "transitive_location",
+    "transitive_before",
+    "transitive_after",
+    "transitive_superclass",
+    "transitive_subclass",
+}
+FAMILY_NORMALIZED_RELATIONS = {"father", "mother", "son", "daughter", "parent"}
+
+
+def _normalize_family_relation(value: Any) -> str:
+    normalized = _normalize_logic_value(value)
+    if normalized in {_normalize_logic_value(item) for item in FATHER_RELATIONS}:
+        return "father"
+    if normalized in {_normalize_logic_value(item) for item in MOTHER_RELATIONS}:
+        return "mother"
+    if normalized in {_normalize_logic_value(item) for item in SON_RELATIONS}:
+        return "son"
+    if normalized in {_normalize_logic_value(item) for item in DAUGHTER_RELATIONS}:
+        return "daughter"
+    return normalized
+
+
+def _inverse_family_relation(value: Any) -> str:
+    normalized = _normalize_family_relation(value)
+    if normalized in {"son", "daughter"}:
+        return "parent"
+    return ""
+
+
+def _ontology_display_name(data: dict[str, Any], fallback: str = "") -> str:
+    name = _as_text(data.get("name"))
+    return name or fallback
+
+
+def _extract_relation_triples(data: dict[str, Any], source_filename: str = "") -> list[dict[str, Any]]:
+    subject = _ontology_display_name(data, source_filename)
+    if not subject:
+        return []
+
+    triples: list[dict[str, Any]] = []
+    interactions = data.get("interactions") or []
+    if not isinstance(interactions, list):
+        return triples
+
+    for index, interaction in enumerate(interactions):
+        if not isinstance(interaction, dict):
+            continue
+        relation_type = _as_text(interaction.get("type"))
+        target = _as_text(interaction.get("target"))
+        if not relation_type or not target:
+            continue
+        normalized_subject = _normalize_logic_value(subject)
+        normalized_type = _normalize_family_relation(relation_type)
+        normalized_target = _normalize_logic_value(target)
+        if not normalized_subject or not normalized_type or not normalized_target:
+            continue
+        triples.append({
+            "subject": subject,
+            "type": relation_type,
+            "target": target,
+            "normalized_subject": normalized_subject,
+            "normalized_type": normalized_type,
+            "normalized_target": normalized_target,
+            "source_filename": source_filename,
+            "source_index": index,
+        })
+        inverse_relation = _inverse_family_relation(relation_type)
+        if inverse_relation:
+            triples.append({
+                "subject": target,
+                "type": f"父母(由{relation_type}反推)",
+                "target": subject,
+                "normalized_subject": normalized_target,
+                "normalized_type": inverse_relation,
+                "normalized_target": normalized_subject,
+                "source_filename": source_filename,
+                "source_index": index,
+                "derived_from_inverse": {
+                    "subject": subject,
+                    "type": relation_type,
+                    "target": target,
+                },
+            })
+    return triples
+
+
+def _read_project_current_ontologies(project_id: str, client: GatewayClient) -> list[dict[str, Any]]:
+    path = f"/xg/timelines/{quote(str(project_id).strip(), safe='')}"
+    response = client.get_json(path)
+    timelines = response.get("timelines") or []
+    ontologies: list[dict[str, Any]] = []
+    for item in timelines:
+        if not isinstance(item, dict):
+            continue
+        filename = _as_text(item.get("filename"))
+        if not filename:
+            continue
+        try:
+            read_response = client.get_json(
+                f"/xg/read/{quote(str(project_id).strip(), safe='')}/{quote(filename, safe='')}"
+            )
+        except Exception as exc:
+            ontologies.append({
+                "filename": filename,
+                "data": {},
+                "read_error": str(exc),
+            })
+            continue
+        data = read_response.get("data")
+        if isinstance(data, dict):
+            ontologies.append({
+                "filename": filename,
+                "data": data,
+                "read_error": "",
+            })
+    return ontologies
+
+
+def _coerce_ontology_payload(value: Any) -> dict[str, Any]:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("new_ontology must be a JSON object")
+
+
+def _coerce_json_object(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(f"{field_name} must be a JSON object")
+
+
+def _attribute_text(value: Any) -> str:
+    if isinstance(value, dict):
+        target = _as_text(value.get("target"))
+        relation_type = _as_text(value.get("type"))
+        name = _as_text(value.get("name") or value.get("value"))
+        parts = [part for part in [name, relation_type, target] if part]
+        return " ".join(parts)
+    return _as_text(value)
+
+
+def _normalize_added_attributes(value: Any) -> list[dict[str, Any]]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [{"field": "attributes", "value": value, "text": value}]
+    if isinstance(value, dict):
+        return [{
+            "field": _as_text(value.get("field")) or "attributes",
+            "value": value.get("value", value),
+            "text": _attribute_text(value.get("value", value)),
+        }]
+    if isinstance(value, list):
+        result: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                result.append({
+                    "field": _as_text(item.get("field")) or "attributes",
+                    "value": item.get("value", item),
+                    "text": _attribute_text(item.get("value", item)),
+                })
+            else:
+                result.append({"field": "attributes", "value": item, "text": _attribute_text(item)})
+        return [item for item in result if _as_text(item.get("text"))]
+    return [{"field": "attributes", "value": value, "text": _attribute_text(value)}]
+
+
+def _hashable_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+def _diff_added_attributes(current: dict[str, Any], proposed: dict[str, Any]) -> list[dict[str, Any]]:
+    additions: list[dict[str, Any]] = []
+    for field in ("abilities", "interactions"):
+        current_values = current.get(field) if isinstance(current.get(field), list) else []
+        proposed_values = proposed.get(field) if isinstance(proposed.get(field), list) else []
+        current_set = {_hashable_json(item) for item in current_values}
+        for item in proposed_values:
+            if _hashable_json(item) not in current_set:
+                additions.append({
+                    "field": field,
+                    "value": item,
+                    "text": _attribute_text(item),
+                })
+
+    ignored_fields = {"abilities", "interactions", "probability"}
+    for field, value in proposed.items():
+        if field in ignored_fields:
+            continue
+        if field not in current or current.get(field) != value:
+            additions.append({
+                "field": field,
+                "value": value,
+                "text": f"{field} {_attribute_text(value)}".strip(),
+            })
+    return [item for item in additions if _as_text(item.get("text"))]
+
+
+def _ontology_profile(ontology: dict[str, Any]) -> dict[str, Any]:
+    name = _ontology_display_name(ontology)
+    subject_parts = [
+        name,
+        _as_text(ontology.get("category")),
+        _as_text(ontology.get("type")),
+        _as_text(ontology.get("class")),
+        _as_text(ontology.get("ontology_type")),
+    ]
+    subject_text = " ".join(part for part in subject_parts if part)
+    normalized_subject = _normalize_logic_value(subject_text)
+    text_parts = [name]
+    for ability in ontology.get("abilities") or []:
+        text_parts.append(_attribute_text(ability))
+    for interaction in ontology.get("interactions") or []:
+        text_parts.append(_attribute_text(interaction))
+    text = " ".join(text_parts)
+    normalized = _normalize_logic_value(text)
+
+    def detect_roles(source: str, allow_contextual: bool) -> set[str]:
+        detected: set[str] = set()
+        student_tokens = ["学生", "student"] if not allow_contextual else ["学生", "学习", "作业", "课程", "student"]
+        if any(token in source for token in student_tokens):
+            detected.add("学生")
+        if any(token in source for token in ["警察", "公安", "警校", "辅警", "治安", "巡逻", "police"]):
+            detected.add("警务相关人员")
+        if any(token in source for token in ["保安", "安保", "security"]):
+            detected.add("保安")
+        if any(token in source for token in ["老师", "教师", "教学", "teacher"]):
+            detected.add("教师")
+        if any(token in source for token in ["家长", "父母", "父亲", "母亲", "爸爸", "妈妈", "parent"]):
+            detected.add("家长")
+        if any(token in source for token in ["汽车维修", "修车", "汽修", "维修技师", "汽车维修工"]):
+            detected.add("汽车维修工")
+        if any(token in source for token in ["群众", "居民", "市民", "受害人", "人员"]):
+            detected.add("群众")
+        if any(token in source for token in ["苹果", "柠檬", "葡萄", "小麦", "面粉", "面包", "饮料", "食品", "水果", "汁", "酒"]):
+            detected.add("食品或物品")
+        if any(token in source for token in ["团队", "组织", "管理处", "公司", "机构"]):
+            detected.add("组织")
+        if any(token in source for token in ["广场", "区域", "道路", "地点"]):
+            detected.add("地点")
+        return detected
+
+    roles = detect_roles(normalized_subject, allow_contextual=False)
+    if not roles:
+        roles = detect_roles(normalized, allow_contextual=True)
+    if not roles and name:
+        roles.add("未知主体")
+
+    return {
+        "name": name,
+        "roles": sorted(roles),
+        "profile_text": text,
+    }
+
+
+def _analyze_attribute_semantics(attribute: dict[str, Any]) -> dict[str, Any]:
+    text = _as_text(attribute.get("text"))
+    normalized = _normalize_logic_value(text)
+
+    if any(token in normalized for token in ["抓小偷", "抓捕", "制止盗窃", "报警", "巡逻", "治安", "执法", "安保处置"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "治安处置行为",
+            "required_subject_roles": ["警务相关人员", "保安", "群众", "受害人", "治安志愿者"],
+            "risk_level": "medium",
+            "explanation": "该属性涉及治安或安全处置，需要主体具备合法身份、现场角色或事件场景。",
+        }
+    if any(token in normalized for token in ["学习", "上课", "上学", "听课", "完成作业", "考试", "科研", "课程"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "学习行为",
+            "required_subject_roles": ["学生", "学员", "研究人员"],
+            "risk_level": "low",
+            "explanation": "该属性属于学习或训练场景，通常适合学生、学员或研究人员。",
+        }
+    if any(token in normalized for token in ["写作业", "做作业", "交作业", "完成家庭作业"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "学生作业行为",
+            "required_subject_roles": ["学生", "学员"],
+            "risk_level": "low",
+            "explanation": "该属性属于学生完成作业的基础行为，不适合作为教师、家长等主体的稳定能力。",
+        }
+    if any(token in normalized for token in ["教学", "授课", "批改作业", "指导学生", "备课"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "教学行为",
+            "required_subject_roles": ["教师", "导师", "培训人员"],
+            "risk_level": "low",
+            "explanation": "该属性属于教学职责，通常需要教师或导师类主体。",
+        }
+    if any(token in normalized for token in ["榨成", "加工成", "制成", "磨成", "酿成", "由制成", "食用", "饮用", "味道", "颜色"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "物品加工或物品属性",
+            "required_subject_roles": ["食品或物品"],
+            "risk_level": "low",
+            "explanation": "该属性描述物品加工、来源或物品固有属性。",
+        }
+    if any(token in normalized for token in ["修汽车", "维修汽车", "修车", "车辆维修", "汽车维修", "更换轮胎", "发动机维修"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "汽车维修行为",
+            "required_subject_roles": ["汽车维修工", "维修技师", "汽修机构"],
+            "risk_level": "medium",
+            "explanation": "该属性属于专业汽车维修行为，需要维修职业或机构主体，不应挂到普通家长等生活角色上。",
+        }
+    if any(token in normalized for token in ["救治", "诊断", "开药", "手术", "医疗"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "医疗行为",
+            "required_subject_roles": ["医生", "护士", "医疗机构"],
+            "risk_level": "high",
+            "explanation": "该属性涉及医疗专业行为，需要具备医疗主体资质。",
+        }
+    if any(token in normalized for token in ["贷款", "放款", "授信", "审批资金", "金融"]):
+        return {
+            "attribute": attribute,
+            "semantic_type": "金融业务行为",
+            "required_subject_roles": ["银行", "金融机构", "信贷人员"],
+            "risk_level": "high",
+            "explanation": "该属性涉及金融业务，需要具备金融机构或授权人员角色。",
+        }
+
+    return {
+        "attribute": attribute,
+        "semantic_type": "通用属性",
+        "required_subject_roles": [],
+        "risk_level": "low",
+        "explanation": "当前规则未识别出强约束语义，默认作为通用属性处理。",
+    }
+
+
+def _judge_attribute_compatibility(profile: dict[str, Any], semantic: dict[str, Any]) -> dict[str, Any]:
+    roles = set(profile.get("roles") or [])
+    semantic_type = str(semantic.get("semantic_type") or "")
+    name = str(profile.get("name") or "当前本体")
+    text = _attribute_text((semantic.get("attribute") or {}).get("value"))
+
+    if semantic_type == "治安处置行为":
+        if roles & {"警务相关人员", "保安"}:
+            return {
+                "status": "accepted",
+                "is_reasonable": True,
+                "confidence": 0.88,
+                "reason": f"{name} 已具备警务或安保角色，新增“{text}”这类治安处置行为基本成立。",
+                "suggested_categories": ["治安处置人员"],
+            }
+        if "学生" in roles:
+            return {
+                "status": "rejected_suggestion",
+                "is_reasonable": False,
+                "confidence": 0.86,
+                "reason": f"{name} 是学生本体，“{text}”不是学生的基础能力，不能直接挂到学生本体上；若业务确实需要，应拆出更细类别。",
+                "suggested_categories": ["警校学生", "见义勇为学生", "治安志愿者"],
+            }
+        if roles & {"群众", "未知主体"}:
+            return {
+                "status": "rejected_suggestion",
+                "is_reasonable": False,
+                "confidence": 0.78,
+                "reason": f"{name} 的基础角色不足以承载“{text}”这类治安处置行为；应先拆出治安协助或见义勇为类主体。",
+                "suggested_categories": ["见义勇为人员", "治安协助人员"],
+            }
+        return {
+            "status": "rejected_suggestion",
+            "is_reasonable": False,
+            "confidence": 0.82,
+            "reason": f"{name} 的主体角色是 {', '.join(sorted(roles)) or '未知'}，不适合直接承载“{text}”这类治安处置行为。",
+            "suggested_categories": [],
+        }
+
+    if semantic_type == "物品加工或物品属性":
+        if "食品或物品" in roles:
+            return {
+                "status": "accepted",
+                "is_reasonable": True,
+                "confidence": 0.86,
+                "reason": f"{name} 是食品或物品类本体，新增“{text}”这类加工或物品属性基本成立。",
+                "suggested_categories": ["加工食品", "物品属性本体"],
+            }
+        return {
+            "status": "rejected_suggestion",
+            "is_reasonable": False,
+            "confidence": 0.78,
+            "reason": f"{name} 不是物品类主体，不建议直接挂载“{text}”这类物品加工或固有属性。",
+            "suggested_categories": [],
+        }
+
+    if semantic_type in {"学习行为", "学生作业行为"}:
+        if "学生" in roles:
+            return {
+                "status": "accepted",
+                "is_reasonable": True,
+                "confidence": 0.9,
+                "reason": f"{name} 是学生相关本体，新增“{text}”这类学习行为成立。",
+                "suggested_categories": ["学生"],
+            }
+        return {
+            "status": "rejected_suggestion",
+            "is_reasonable": False,
+            "confidence": 0.82,
+            "reason": f"{name} 当前不是学生或学员主体，“{text}”不是其基础属性，不建议直接挂载。",
+            "suggested_categories": ["学员", "培训对象"],
+        }
+
+    if semantic_type == "教学行为":
+        if "教师" in roles:
+            return {
+                "status": "accepted",
+                "is_reasonable": True,
+                "confidence": 0.9,
+                "reason": f"{name} 是教师相关本体，新增“{text}”这类教学行为成立。",
+                "suggested_categories": ["教师"],
+            }
+        return {
+            "status": "rejected_suggestion",
+            "is_reasonable": False,
+            "confidence": 0.82,
+            "reason": f"{name} 当前角色不具备明确教学职责，新增“{text}”需要补充教师、助教或培训人员类别。",
+            "suggested_categories": ["助教", "培训人员"],
+        }
+
+    if semantic_type == "汽车维修行为":
+        if roles & {"汽车维修工", "维修技师", "汽修机构"}:
+            return {
+                "status": "accepted",
+                "is_reasonable": True,
+                "confidence": 0.9,
+                "reason": f"{name} 是维修相关主体，新增“{text}”这类汽车维修行为成立。",
+                "suggested_categories": ["汽车维修工"],
+            }
+        return {
+            "status": "rejected_suggestion",
+            "is_reasonable": False,
+            "confidence": 0.88,
+            "reason": f"{name} 的基础角色不具备汽车维修职责，“{text}”不是其基础属性，不建议直接挂载。",
+            "suggested_categories": ["汽车维修工", "维修技师", "汽修机构"],
+        }
+
+    if semantic_type in {"医疗行为", "金融业务行为"}:
+        return {
+            "status": "conditional",
+            "is_reasonable": False,
+            "confidence": 0.74,
+            "reason": f"{semantic_type} 是强资质行为，{name} 需要补充明确授权或专业身份后才建议成立。",
+            "suggested_categories": semantic.get("required_subject_roles", []),
+        }
+
+    return {
+        "status": "rejected_suggestion",
+        "is_reasonable": False,
+        "confidence": 0.55,
+        "reason": f"“{text}”未被识别为 {name} 的基础属性；在强判别模式下不建议直接挂载，需先补充更明确的主体类别或规则。",
+        "suggested_categories": [],
+    }
+
+
+def _build_semantic_patch(compatibility: dict[str, Any], semantic: dict[str, Any]) -> dict[str, Any]:
+    categories = compatibility.get("suggested_categories") or []
+    if not categories or not compatibility.get("is_reasonable"):
+        return {}
+    category = str(categories[0])
+    semantic_type = str(semantic.get("semantic_type") or "")
+    patch: dict[str, Any] = {"category": category}
+    if semantic_type and semantic_type != "通用属性":
+        patch["interactions"] = [{"target": semantic_type, "type": "参与"}]
+    return patch
+
+
+def review_ontology_attribute(
+    project_id: str,
+    filename: str | None = None,
+    ontology_name: str | None = None,
+    current_ontology: dict[str, Any] | str | None = None,
+    proposed_ontology: dict[str, Any] | str | None = None,
+    added_attributes: Any = None,
+    client: GatewayClient | None = None,
+) -> dict[str, Any]:
+    if not str(project_id).strip():
+        raise ValueError("project_id is required")
+
+    gateway_client = client or GatewayClient()
+    normalized_project_id = str(project_id).strip()
+    current_payload = _coerce_json_object(current_ontology, "current_ontology")
+    proposed_payload = _coerce_json_object(proposed_ontology, "proposed_ontology")
+    resolution: dict[str, Any] = {"mode": "inline_current_ontology" if current_payload else "unresolved"}
+    resolved_filename = _as_text(filename)
+
+    if not current_payload:
+        resolved_filename, resolution = resolve_ontology_filename(
+            project_id=normalized_project_id,
+            filename=filename,
+            ontology_name=ontology_name,
+            client=gateway_client,
+        )
+        content = get_version_content(
+            project_id=normalized_project_id,
+            filename=resolved_filename,
+            client=gateway_client,
+        )
+        current_payload = content["content"]
+
+    attributes = _normalize_added_attributes(added_attributes)
+    if not attributes and proposed_payload:
+        attributes = _diff_added_attributes(current_payload, proposed_payload)
+
+    profile = _ontology_profile(current_payload)
+    reviews: list[dict[str, Any]] = []
+    for attribute in attributes:
+        semantic = _analyze_attribute_semantics(attribute)
+        compatibility = _judge_attribute_compatibility(profile, semantic)
+        reviews.append({
+            "attribute": attribute,
+            "semantic": {
+                "semantic_type": semantic["semantic_type"],
+                "required_subject_roles": semantic["required_subject_roles"],
+                "risk_level": semantic["risk_level"],
+                "explanation": semantic["explanation"],
+            },
+            "compatibility": compatibility,
+            "suggested_patch": _build_semantic_patch(compatibility, semantic),
+        })
+
+    status_order = {"rejected_suggestion": 3, "conditional": 2, "accepted": 1}
+    overall_status = "no_new_attribute"
+    if reviews:
+        overall_status = max(
+            (str(item["compatibility"].get("status") or "accepted") for item in reviews),
+            key=lambda value: status_order.get(value, 0),
+        )
+
+    return {
+        "tool_name": REVIEW_ONTOLOGY_ATTRIBUTE_TOOL.name,
+        "project_id": normalized_project_id,
+        "filename": resolved_filename,
+        "ontology_name": profile.get("name") or _as_text(ontology_name),
+        "target_resolution": resolution,
+        "subject_profile": profile,
+        "summary": {
+            "added_attribute_count": len(attributes),
+            "accepted_count": len([item for item in reviews if item["compatibility"].get("status") == "accepted"]),
+            "conditional_count": len([item for item in reviews if item["compatibility"].get("status") == "conditional"]),
+            "rejected_suggestion_count": len([item for item in reviews if item["compatibility"].get("status") == "rejected_suggestion"]),
+            "overall_status": overall_status,
+        },
+        "reviews": reviews,
+    }
+
+
+def _current_ontology_attributes(ontology: dict[str, Any]) -> list[dict[str, Any]]:
+    attributes: list[dict[str, Any]] = []
+    for ability in ontology.get("abilities") or []:
+        text = _attribute_text(ability)
+        if text:
+            attributes.append({
+                "field": "abilities",
+                "value": ability,
+                "text": text,
+            })
+    for interaction in ontology.get("interactions") or []:
+        text = _attribute_text(interaction)
+        if text:
+            attributes.append({
+                "field": "interactions",
+                "value": interaction,
+                "text": text,
+            })
+    return attributes
+
+
+def review_ontology_consistency(
+    project_id: str,
+    filename: str | None = None,
+    ontology_name: str | None = None,
+    current_ontology: dict[str, Any] | str | None = None,
+    client: GatewayClient | None = None,
+) -> dict[str, Any]:
+    if not str(project_id).strip():
+        raise ValueError("project_id is required")
+
+    gateway_client = client or GatewayClient()
+    normalized_project_id = str(project_id).strip()
+    current_payload = _coerce_json_object(current_ontology, "current_ontology")
+    resolution: dict[str, Any] = {"mode": "inline_current_ontology" if current_payload else "unresolved"}
+    resolved_filename = _as_text(filename)
+
+    if not current_payload:
+        resolved_filename, resolution = resolve_ontology_filename(
+            project_id=normalized_project_id,
+            filename=filename,
+            ontology_name=ontology_name,
+            client=gateway_client,
+        )
+        content = get_version_content(
+            project_id=normalized_project_id,
+            filename=resolved_filename,
+            client=gateway_client,
+        )
+        current_payload = content["content"]
+
+    profile = _ontology_profile(current_payload)
+    attributes = _current_ontology_attributes(current_payload)
+    reviews: list[dict[str, Any]] = []
+    suggested_category_set: set[str] = set()
+
+    for attribute in attributes:
+        semantic = _analyze_attribute_semantics(attribute)
+        compatibility = _judge_attribute_compatibility(profile, semantic)
+        for category in compatibility.get("suggested_categories") or []:
+            if category:
+                suggested_category_set.add(str(category))
+        reviews.append({
+            "attribute": attribute,
+            "semantic": {
+                "semantic_type": semantic["semantic_type"],
+                "required_subject_roles": semantic["required_subject_roles"],
+                "risk_level": semantic["risk_level"],
+                "explanation": semantic["explanation"],
+            },
+            "compatibility": compatibility,
+            "suggested_patch": _build_semantic_patch(compatibility, semantic),
+        })
+
+    status_order = {"rejected_suggestion": 3, "conditional": 2, "accepted": 1}
+    overall_status = "no_reviewable_attribute"
+    if reviews:
+        overall_status = max(
+            (str(item["compatibility"].get("status") or "accepted") for item in reviews),
+            key=lambda value: status_order.get(value, 0),
+        )
+
+    grouped = {
+        "accepted": [item for item in reviews if item["compatibility"].get("status") == "accepted"],
+        "conditional": [item for item in reviews if item["compatibility"].get("status") == "conditional"],
+        "rejected_suggestion": [item for item in reviews if item["compatibility"].get("status") == "rejected_suggestion"],
+    }
+
+    return {
+        "tool_name": REVIEW_ONTOLOGY_CONSISTENCY_TOOL.name,
+        "project_id": normalized_project_id,
+        "filename": resolved_filename,
+        "ontology_name": profile.get("name") or _as_text(ontology_name),
+        "target_resolution": resolution,
+        "subject_profile": profile,
+        "summary": {
+            "reviewed_attribute_count": len(attributes),
+            "accepted_count": len(grouped["accepted"]),
+            "conditional_count": len(grouped["conditional"]),
+            "rejected_suggestion_count": len(grouped["rejected_suggestion"]),
+            "overall_status": overall_status,
+            "suggested_categories": sorted(suggested_category_set),
+        },
+        "reviews": reviews,
+        "grouped_reviews": grouped,
+    }
+
+
+def _grandparent_relation(parent_relation: str, child_parent_relation: str) -> tuple[str, str]:
+    if parent_relation == "father" and child_parent_relation == "father":
+        return "爷爷", "father_father_grandfather"
+    if parent_relation == "father" and child_parent_relation == "mother":
+        return "外公", "father_mother_maternal_grandfather"
+    if parent_relation == "mother" and child_parent_relation == "father":
+        return "奶奶", "mother_father_grandmother"
+    if parent_relation == "mother" and child_parent_relation == "mother":
+        return "外婆", "mother_mother_maternal_grandmother"
+    if parent_relation == "father" and child_parent_relation == "parent":
+        return "祖父或外祖父", "father_parent_grandfather"
+    if parent_relation == "mother" and child_parent_relation == "parent":
+        return "祖母或外祖母", "mother_parent_grandmother"
+    if parent_relation == "parent" and child_parent_relation in {"father", "mother", "parent"}:
+        return "祖辈", "parent_parent_grandparent"
+    return "", ""
+
+
+def _append_inferred_relation(
+    inferred: list[dict[str, Any]],
+    seen: set[tuple[str, str, str]],
+    existing: set[tuple[str, str, str]],
+    subject: str,
+    relation_type: str,
+    target: str,
+    rule_id: str,
+    rule: str,
+    evidence: list[dict[str, Any]],
+) -> None:
+    key = (
+        _normalize_logic_value(subject),
+        _normalize_family_relation(relation_type),
+        _normalize_logic_value(target),
+    )
+    display_key = (subject, relation_type, target)
+    if key in existing or display_key in seen:
+        return
+    seen.add(display_key)
+    inferred.append({
+        "subject": subject,
+        "type": relation_type,
+        "target": target,
+        "rule_id": rule_id,
+        "rule": rule,
+        "evidence": evidence,
+    })
+
+
+def _infer_transitive_relation(
+    first: dict[str, Any],
+    second: dict[str, Any],
+) -> tuple[str, str]:
+    if first["normalized_target"] != second["normalized_subject"]:
+        return "", ""
+    first_rule = TRANSITIVE_RELATION_INDEX.get(str(first.get("normalized_type", "")))
+    second_rule = TRANSITIVE_RELATION_INDEX.get(str(second.get("normalized_type", "")))
+    if not first_rule or not second_rule:
+        return "", ""
+    if first_rule["rule_id"] != second_rule["rule_id"]:
+        return "", ""
+    return first_rule["inferred_type"], first_rule["rule_id"]
+
+
+def _infer_family_relations(triples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing = {
+        (
+            item["normalized_subject"],
+            _normalize_family_relation(item["type"]),
+            item["normalized_target"],
+        )
+        for item in triples
+    }
+    inferred: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for first in triples:
+        for second in triples:
+            if first is second:
+                continue
+            if first["normalized_target"] != second["normalized_subject"]:
+                continue
+
+            relation_type, rule_id = _grandparent_relation(
+                str(first.get("normalized_type")),
+                str(second.get("normalized_type")),
+            )
+            if relation_type:
+                _append_inferred_relation(
+                    inferred=inferred,
+                    seen=seen,
+                    existing=existing,
+                    subject=first["subject"],
+                    relation_type=relation_type,
+                    target=second["target"],
+                    rule_id=rule_id,
+                    rule=f"{first['subject']} 是 {first['target']} 的{first['type']}，"
+                         f"{second['subject']} 是 {second['target']} 的{second['type']}，"
+                         f"因此 {first['subject']} 是 {second['target']} 的{relation_type}",
+                    evidence=[first, second],
+                )
+
+            relation_type, rule_id = _infer_transitive_relation(first, second)
+            if relation_type:
+                _append_inferred_relation(
+                    inferred=inferred,
+                    seen=seen,
+                    existing=existing,
+                    subject=first["subject"],
+                    relation_type=relation_type,
+                    target=second["target"],
+                    rule_id=rule_id,
+                    rule=f"{first['subject']} {first['type']} {first['target']}，"
+                         f"{second['subject']} {second['type']} {second['target']}，"
+                         f"因此 {first['subject']} {relation_type} {second['target']}",
+                    evidence=[first, second],
+                )
+    return inferred
+
+
+def _infer_property_transfer_relations(triples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing = {
+        (
+            item["normalized_subject"],
+            _normalize_family_relation(item["type"]),
+            item["normalized_target"],
+        )
+        for item in triples
+    }
+    inferred: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    property_triples = [
+        item for item in triples
+        if str(item.get("normalized_type", "")) in PROPERTY_RELATION_TYPES
+    ]
+    if not property_triples:
+        return inferred
+
+    for property_item in property_triples:
+        source_name = property_item["subject"]
+        property_type = property_item["type"]
+        property_value = property_item["target"]
+        normalized_source = property_item["normalized_subject"]
+
+        for relation_item in triples:
+            relation_type = str(relation_item.get("normalized_type", ""))
+            product_name = ""
+            if (
+                relation_type in MADE_INTO_RELATION_TYPES
+                and relation_item["normalized_subject"] == normalized_source
+            ):
+                product_name = relation_item["target"]
+            elif (
+                relation_type in MADE_FROM_RELATION_TYPES
+                and relation_item["normalized_target"] == normalized_source
+            ):
+                product_name = relation_item["subject"]
+
+            if not product_name:
+                continue
+
+            _append_inferred_relation(
+                inferred=inferred,
+                seen=seen,
+                existing=existing,
+                subject=product_name,
+                relation_type=property_type,
+                target=property_value,
+                rule_id="property_transfer_to_processed_item",
+                rule=(
+                    f"{source_name} 的{property_type}是 {property_value}，"
+                    f"{relation_item['subject']} {relation_item['type']} {relation_item['target']}，"
+                    f"因此 {product_name} 的{property_type}也可推导为 {property_value}"
+                ),
+                evidence=[property_item, relation_item],
+            )
+
+    return inferred
+
+
+def _relation_display(item: dict[str, Any]) -> str:
+    return f"{item.get('subject')} {item.get('type')} {item.get('target')}"
+
+
+def _logic_issue(
+    code: str,
+    severity: str,
+    title: str,
+    detail: str,
+    suggestion: str,
+    evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "suggestion": suggestion,
+        "evidence": evidence,
+    }
+
+
+def _infer_relation_category(item: dict[str, Any]) -> str:
+    relation_type = str(item.get("normalized_type", ""))
+    if relation_type in FAMILY_NORMALIZED_RELATIONS:
+        return f"family:{relation_type}"
+    if relation_type in PROPERTY_RELATION_TYPES:
+        return f"property:{relation_type}"
+    if relation_type in MADE_INTO_RELATION_TYPES:
+        return "made_into"
+    if relation_type in MADE_FROM_RELATION_TYPES:
+        return "made_from"
+    transitive_rule = TRANSITIVE_RELATION_INDEX.get(relation_type)
+    if transitive_rule:
+        return str(transitive_rule.get("rule_id") or "")
+    return relation_type
+
+
+def _find_logic_issues(
+    triples: list[dict[str, Any]],
+    inferred_relations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen_issue_keys: set[tuple[Any, ...]] = set()
+
+    def add_issue(issue: dict[str, Any], key: tuple[Any, ...]) -> None:
+        if key in seen_issue_keys:
+            return
+        seen_issue_keys.add(key)
+        issues.append(issue)
+
+    relation_by_pair: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    property_by_subject_type: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+    for item in triples:
+        subject = str(item.get("normalized_subject", ""))
+        target = str(item.get("normalized_target", ""))
+        relation_type = str(item.get("normalized_type", ""))
+        if not subject or not target or not relation_type:
+            continue
+
+        if subject == target:
+            add_issue(
+                _logic_issue(
+                    code="self_relation",
+                    severity="medium",
+                    title="关系自指",
+                    detail=f"发现本体关系指向自身：{_relation_display(item)}。",
+                    suggestion="检查该关系是否录入错误；除非业务明确允许自指，否则建议删除或改为正确目标。",
+                    evidence=[item],
+                ),
+                ("self_relation", subject, relation_type, target),
+            )
+
+        category = _infer_relation_category(item)
+        relation_by_pair.setdefault((subject, target, category), []).append(item)
+        if relation_type in SINGLE_VALUE_PROPERTY_TYPES:
+            property_by_subject_type.setdefault((subject, relation_type), []).append(item)
+
+    for (subject, property_type), items in property_by_subject_type.items():
+        values = {str(item.get("normalized_target", "")) for item in items if item.get("normalized_target")}
+        if len(values) > 1:
+            add_issue(
+                _logic_issue(
+                    code="conflicting_single_value_property",
+                    severity="high",
+                    title="单值属性冲突",
+                    detail=f"{items[0].get('subject')} 的 {items[0].get('type')} 出现多个不同取值。",
+                    suggestion="颜色、味道、状态这类单值属性应保留一个当前有效值，或改造成多维属性字段。",
+                    evidence=items,
+                ),
+                ("conflicting_single_value_property", subject, property_type),
+            )
+
+    for (subject, target, category), forward_items in relation_by_pair.items():
+        if subject == target:
+            continue
+        reverse_items = relation_by_pair.get((target, subject, category), [])
+        if not reverse_items:
+            continue
+        if category.startswith("family:") or category in SUSPICIOUS_BIDIRECTIONAL_RULE_IDS:
+            evidence = forward_items[:1] + reverse_items[:1]
+            add_issue(
+                _logic_issue(
+                    code="suspicious_bidirectional_relation",
+                    severity="high" if category.startswith("family:") else "medium",
+                    title="可疑双向关系",
+                    detail=f"同一类方向性关系同时双向存在：{_relation_display(evidence[0])}；{_relation_display(evidence[1])}。",
+                    suggestion="检查是否把主语和宾语写反，或是否应该使用另一种反向关系表达。",
+                    evidence=evidence,
+                ),
+                ("suspicious_bidirectional_relation", min(subject, target), max(subject, target), category),
+            )
+
+    explicit_properties = {
+        (
+            str(item.get("normalized_subject", "")),
+            str(item.get("normalized_type", "")),
+        ): item
+        for item in triples
+        if str(item.get("normalized_type", "")) in SINGLE_VALUE_PROPERTY_TYPES
+    }
+    for inferred in inferred_relations:
+        relation_type = _normalize_logic_value(inferred.get("type"))
+        if relation_type not in SINGLE_VALUE_PROPERTY_TYPES:
+            continue
+        subject = _normalize_logic_value(inferred.get("subject"))
+        target = _normalize_logic_value(inferred.get("target"))
+        explicit = explicit_properties.get((subject, relation_type))
+        if explicit and str(explicit.get("normalized_target", "")) != target:
+            add_issue(
+                _logic_issue(
+                    code="inferred_property_conflicts_with_explicit_property",
+                    severity="high",
+                    title="推导属性与显式属性冲突",
+                    detail=(
+                        f"规则推导出 {inferred.get('subject')} 的{inferred.get('type')}为 {inferred.get('target')}，"
+                        f"但当前数据中显式记录为 {explicit.get('target')}。"
+                    ),
+                    suggestion="检查原料属性、制成关系或成品显式属性是否存在录入错误；若加工会改变属性，应补充例外规则。",
+                    evidence=[inferred, explicit],
+                ),
+                ("inferred_property_conflict", subject, relation_type),
+            )
+
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    issues.sort(key=lambda item: (severity_order.get(str(item.get("severity")), 9), item.get("code", "")))
+    return issues
+
+
+def _inferred_properties_for_new_ontology(
+    inferred_relations: list[dict[str, Any]],
+    new_ontology_name: str,
+) -> list[dict[str, Any]]:
+    if not _as_text(new_ontology_name):
+        return []
+    normalized_new_name = _normalize_logic_value(new_ontology_name)
+    properties: list[dict[str, Any]] = []
+    for relation in inferred_relations:
+        subject = _as_text(relation.get("subject"))
+        target = _as_text(relation.get("target"))
+        relation_type = _as_text(relation.get("type"))
+        if _normalize_logic_value(subject) == normalized_new_name:
+            properties.append({
+                "field": "interactions",
+                "value": {"target": target, "type": relation_type},
+                "direction": "outgoing",
+                "reason": relation.get("rule"),
+                "evidence": relation.get("evidence", []),
+            })
+        if _normalize_logic_value(target) == normalized_new_name:
+            properties.append({
+                "field": relation_type,
+                "value": subject,
+                "direction": "incoming",
+                "reason": relation.get("rule"),
+                "evidence": relation.get("evidence", []),
+            })
+    return properties
 
 
 def get_community_top_version(
@@ -915,6 +2167,166 @@ def find_governance_gaps(
     }
 
 
+def infer_causal_logic(
+    project_id: str,
+    new_ontology: dict[str, Any] | str | None = None,
+    filename: str | None = None,
+    ontology_name: str | None = None,
+    client: GatewayClient | None = None,
+) -> dict[str, Any]:
+    if not str(project_id).strip():
+        raise ValueError("project_id is required")
+
+    gateway_client = client or GatewayClient()
+    normalized_project_id = str(project_id).strip()
+    payload = _coerce_ontology_payload(new_ontology)
+
+    resolution: dict[str, Any] = {"mode": "project"}
+    if not payload:
+        if _as_text(filename) or _as_text(ontology_name):
+            try:
+                resolved_filename, resolution = resolve_ontology_filename(
+                    project_id=normalized_project_id,
+                    filename=filename,
+                    ontology_name=ontology_name,
+                    client=gateway_client,
+                )
+                content = get_version_content(
+                    project_id=normalized_project_id,
+                    filename=resolved_filename,
+                    client=gateway_client,
+                )
+                payload = content["content"]
+            except Exception as exc:
+                fallback_name = _as_text(ontology_name)
+                if not fallback_name:
+                    raise
+                payload = {
+                    "name": fallback_name,
+                    "interactions": [],
+                }
+                resolution = {
+                    "mode": "new_ontology_name_fallback",
+                    "input": fallback_name,
+                    "detail": "ontology was not found in the current project; using the supplied ontology_name as a new ontology payload",
+                    "resolve_error": str(exc),
+                }
+    else:
+        resolution = {"mode": "inline_new_ontology"}
+
+    new_ontology_name = _ontology_display_name(payload) if payload else ""
+
+    current_ontologies = _read_project_current_ontologies(normalized_project_id, gateway_client)
+    normalized_new_name = _normalize_logic_value(new_ontology_name)
+    merged_ontologies: list[dict[str, Any]] = []
+    replaced_existing = False
+    read_errors: list[dict[str, str]] = []
+
+    for item in current_ontologies:
+        data = item.get("data")
+        filename_value = _as_text(item.get("filename"))
+        read_error = _as_text(item.get("read_error"))
+        if read_error:
+            read_errors.append({"filename": filename_value, "error": read_error})
+            continue
+        if not isinstance(data, dict):
+            continue
+        if normalized_new_name and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name:
+            merged_ontologies.append({"filename": filename_value or "__new_ontology__", "data": payload})
+            replaced_existing = True
+        else:
+            merged_ontologies.append({"filename": filename_value, "data": data})
+
+    if payload and not replaced_existing:
+        merged_ontologies.append({"filename": "__new_ontology__", "data": payload})
+
+    triples: list[dict[str, Any]] = []
+    ontology_summaries: list[dict[str, Any]] = []
+    for item in merged_ontologies:
+        data = item.get("data") if isinstance(item, dict) else {}
+        filename_value = _as_text(item.get("filename")) if isinstance(item, dict) else ""
+        if not isinstance(data, dict):
+            continue
+        ontology_triples = _extract_relation_triples(data, filename_value)
+        triples.extend(ontology_triples)
+        ontology_summaries.append({
+            "filename": filename_value,
+            "name": _ontology_display_name(data, filename_value),
+            "relation_count": len(ontology_triples),
+            "is_input_ontology": bool(normalized_new_name) and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name,
+        })
+
+    inferred_relations = _infer_family_relations(triples)
+    inferred_relations.extend(_infer_property_transfer_relations(triples))
+    inverse_inferred_relations = [
+        {
+            "subject": item["subject"],
+            "type": "父母",
+            "target": item["target"],
+            "rule_id": "inverse_child_parent",
+            "rule": (
+                f"{item['derived_from_inverse']['subject']} 是 "
+                f"{item['derived_from_inverse']['target']} 的{item['derived_from_inverse']['type']}，"
+                f"因此 {item['subject']} 是 {item['target']} 的父母"
+            ),
+            "evidence": [item["derived_from_inverse"]],
+        }
+        for item in triples
+        if isinstance(item, dict) and isinstance(item.get("derived_from_inverse"), dict)
+    ]
+    inferred_relations = inverse_inferred_relations + inferred_relations
+    logic_issues = _find_logic_issues(triples, inferred_relations)
+    inferred_properties = _inferred_properties_for_new_ontology(
+        inferred_relations=inferred_relations,
+        new_ontology_name=new_ontology_name,
+    )
+
+    return {
+        "tool_name": INFER_CAUSAL_LOGIC_TOOL.name,
+        "project_id": normalized_project_id,
+        "target_resolution": resolution,
+        "new_ontology_name": new_ontology_name,
+        "input_replaced_existing_ontology": replaced_existing,
+        "summary": {
+            "ontology_count": len(ontology_summaries),
+            "base_relation_count": len(triples),
+            "inferred_relation_count": len(inferred_relations),
+            "inferred_property_count_for_new_ontology": len(inferred_properties),
+            "logic_issue_count": len(logic_issues),
+            "high_logic_issue_count": len([item for item in logic_issues if item.get("severity") == "high"]),
+            "read_error_count": len(read_errors),
+        },
+        "inferred_properties": inferred_properties,
+        "inferred_relations": inferred_relations,
+        "logic_issues": logic_issues,
+        "supported_rules": [
+            "父亲 + 父亲 => 爷爷",
+            "父亲 + 母亲 => 外公",
+            "母亲 + 父亲 => 奶奶",
+            "母亲 + 母亲 => 外婆",
+            "自指关系 => 逻辑问题",
+            "方向性关系双向互指 => 逻辑问题",
+            "颜色/味道/状态多个取值 => 逻辑问题",
+            "原料属性推导与成品显式属性冲突 => 逻辑问题",
+            "导致/造成/引起 + 导致/造成/引起 => 间接导致",
+            "影响/作用于 + 影响/作用于 => 间接影响",
+            "依赖/需要 + 依赖/需要 => 间接依赖",
+            "包含/包括/下辖 + 包含/包括/下辖 => 包含",
+            "属于/隶属于 + 属于/隶属于 => 属于",
+            "管理/管辖/负责 + 管理/管辖/负责 => 间接管理",
+            "父类/上位概念 + 父类/上位概念 => 上级",
+            "子类/下位概念 + 子类/下位概念 => 子类",
+            "位于/在 + 位于/在 => 位于",
+            "早于/先于 + 早于/先于 => 早于",
+            "晚于/后于 + 晚于/后于 => 晚于",
+            "原料属性 + 制成/由制成关系 => 成品继承该属性",
+        ],
+        "base_relations": triples,
+        "ontologies": ontology_summaries,
+        "read_errors": read_errors,
+    }
+
+
 def get_available_tools() -> list[ToolDefinition]:
     return [
         COMMUNITY_TOP_VERSION_TOOL,
@@ -923,6 +2335,9 @@ def get_available_tools() -> list[ToolDefinition]:
         VERSION_CONTENT_TOOL,
         COMPARE_VERSIONS_TOOL,
         FIND_GOVERNANCE_GAPS_TOOL,
+        INFER_CAUSAL_LOGIC_TOOL,
+        REVIEW_ONTOLOGY_ATTRIBUTE_TOOL,
+        REVIEW_ONTOLOGY_CONSISTENCY_TOOL,
     ]
 
 
@@ -972,6 +2387,32 @@ def run_tool(name: str, arguments: dict[str, Any], client: GatewayClient | None 
             filename=str(arguments.get("filename", "") or ""),
             ontology_name=str(arguments.get("ontology_name", "") or ""),
             limit=int(arguments.get("limit") or 20),
+            client=client,
+        )
+    if name == INFER_CAUSAL_LOGIC_TOOL.name:
+        return infer_causal_logic(
+            project_id=str(arguments.get("project_id", "")),
+            new_ontology=arguments.get("new_ontology"),
+            filename=str(arguments.get("filename", "") or ""),
+            ontology_name=str(arguments.get("ontology_name", "") or ""),
+            client=client,
+        )
+    if name == REVIEW_ONTOLOGY_ATTRIBUTE_TOOL.name:
+        return review_ontology_attribute(
+            project_id=str(arguments.get("project_id", "")),
+            filename=str(arguments.get("filename", "") or ""),
+            ontology_name=str(arguments.get("ontology_name", "") or ""),
+            current_ontology=arguments.get("current_ontology"),
+            proposed_ontology=arguments.get("proposed_ontology"),
+            added_attributes=arguments.get("added_attributes"),
+            client=client,
+        )
+    if name == REVIEW_ONTOLOGY_CONSISTENCY_TOOL.name:
+        return review_ontology_consistency(
+            project_id=str(arguments.get("project_id", "")),
+            filename=str(arguments.get("filename", "") or ""),
+            ontology_name=str(arguments.get("ontology_name", "") or ""),
+            current_ontology=arguments.get("current_ontology"),
             client=client,
         )
     raise ValueError(f"unsupported tool: {name}")

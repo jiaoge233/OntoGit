@@ -2,6 +2,7 @@ files/
 probability/
 probaility/
 proability/
+gateway_gin/
 agent/.env
 gateway/.env
 gateway/.env.development

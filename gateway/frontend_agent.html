@@ -608,6 +608,21 @@
             <div class="tool-desc">扫描项目或单个本体的治理缺口，例如官方推荐缺失、官方社区分歧、概率缺失或偏低。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校"}</div>
           </div>
+          <div class="tool-card">
+            <div class="tool-name">如果 A 是 B 的父亲，B 是 C 的父亲，能推导出什么？</div>
+            <div class="tool-desc">检索项目本体关系图，并基于新本体输入推导新的逻辑属性或关系。</div>
+            <div class="tool-schema">{"project_id":"demo","new_ontology":{"name":"C","interactions":[]}}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">学生新增“抓小偷”这个能力是否合理？</div>
+            <div class="tool-desc">评估新增属性能否挂到当前本体上，并给出成立条件和建议新增类别。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学生","added_attributes":["抓小偷"]}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">学生本体当前能力是否合理？如果不成立应该新增什么类别？</div>
+            <div class="tool-desc">扫描当前本体已有能力和关系，逐项评估是否符合主体语义。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学生"}</div>
+          </div>
         </div>
       </section>
 
@@ -664,6 +679,8 @@
               <button class="btn" type="button" data-question="学校当前本体内容是什么？">当前内容</button>
               <button class="btn" type="button" data-question="学校 V2 和 V4 差在哪？">版本对比</button>
               <button class="btn" type="button" data-question="demo 项目现在有哪些治理缺口？">治理缺口</button>
+              <button class="btn" type="button" data-question="学生新增抓小偷这个能力是否合理？如果成立应该新增什么类别？">属性评估</button>
+              <button class="btn" type="button" data-question="学生本体当前能力是否合理？如果不成立应该新增什么类别？">一致性评估</button>
             </div>
             <div class="status-line" id="statusLine">等待请求。当前页面会直接调用 /api/agent/query。</div>
           </div>

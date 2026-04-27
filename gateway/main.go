@@ -54,6 +54,9 @@ type Config struct {
 	XGAuthCookie   string
 	AgentDir       string
 	MySQLDSN       string
+	DMXAPIKey      string
+	DMXAPIBaseURL  string
+	DMXAPIModel    string
 }
 
 type HealthStatus struct {
@@ -211,6 +214,9 @@ func loadConfig() Config {
 		XGAuthCookie:   strings.TrimSpace(getValue(values, "GATEWAY_XG_AUTH_COOKIE_NAME", getValue(values, "XG_AUTH_COOKIE_NAME", "xg_session"))),
 		AgentDir:       strings.TrimSpace(values["GATEWAY_AGENT_DIR"]),
 		MySQLDSN:       strings.TrimSpace(values["GATEWAY_MYSQL_DSN"]),
+		DMXAPIKey:      strings.TrimSpace(values["DMXAPI_API_KEY"]),
+		DMXAPIBaseURL:  strings.TrimSpace(getValue(values, "DMXAPI_BASE_URL", "https://www.dmxapi.cn/v1")),
+		DMXAPIModel:    strings.TrimSpace(getValue(values, "DMXAPI_MODEL", "gpt-5.4")),
 	}
 }
 
@@ -925,16 +931,16 @@ func userLoginHandler(cfg Config) http.HandlerFunc {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": safeErrorDetail})
 			return
 		}
-		var payload LoginRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+		var req LoginRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": safeErrorDetail})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		userID, username, err := userStore.login(ctx, payload)
+		userID, username, err := userStore.login(ctx, req)
 		if err != nil {
-			log.Printf("user login failed for %s: %v", normalizeUsername(payload.Username), err)
+			log.Printf("user login failed for %s: %v", normalizeUsername(req.Username), err)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"detail": "Unauthorized"})
 			return
 		}
@@ -1331,12 +1337,25 @@ func runAgentQuery(ctx context.Context, cfg Config, payload AgentQueryRequest) (
 		args = append(args, "--include-raw")
 	}
 
+	if cfg.DMXAPIKey == "" {
+		log.Printf("agent query missing DMXAPI_API_KEY env=%s agent_dir=%s", cfg.Env, agentDir)
+	}
+
 	cmd := execCommandContext(runCtx, "python", args...)
 	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
 		"PYTHONUTF8=1",
 	)
+	if cfg.DMXAPIKey != "" {
+		cmd.Env = append(cmd.Env, "DMXAPI_API_KEY="+cfg.DMXAPIKey)
+	}
+	if cfg.DMXAPIBaseURL != "" {
+		cmd.Env = append(cmd.Env, "DMXAPI_BASE_URL="+cfg.DMXAPIBaseURL)
+	}
+	if cfg.DMXAPIModel != "" {
+		cmd.Env = append(cmd.Env, "DMXAPI_MODEL="+cfg.DMXAPIModel)
+	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

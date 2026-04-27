@@ -594,6 +594,21 @@
             <div class="tool-desc">扫描项目或单个本体的治理缺口。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学校"}</div>
           </div>
+          <div class="tool-card">
+            <div class="tool-name">infer_causal_logic</div>
+            <div class="tool-desc">检索项目本体关系图，合并新本体输入，推导新的逻辑属性或关系。</div>
+            <div class="tool-schema">{"project_id":"demo","new_ontology":{"name":"C","interactions":[]}}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">review_ontology_attribute</div>
+            <div class="tool-desc">评估新增属性是否适合挂到当前本体上，并给出成立条件和建议新增类别。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学生","added_attributes":["抓小偷"]}</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">review_ontology_consistency</div>
+            <div class="tool-desc">评估当前本体已有能力和关系是否符合主体语义。</div>
+            <div class="tool-schema">{"project_id":"demo","ontology_name":"学生"}</div>
+          </div>
         </div>
       </section>
 
@@ -647,6 +662,8 @@
               <button class="btn" data-question="student.json 当前社区星标最高的版本是谁？">社区推荐</button>
               <button class="btn" data-question="student.json 当前官方推荐版本是谁？">官方推荐</button>
               <button class="btn" data-question="demo 项目现在有哪些治理缺口？">治理缺口</button>
+              <button class="btn" data-question="学生新增抓小偷这个能力是否合理？如果成立应该新增什么类别？">属性评估</button>
+              <button class="btn" data-question="学生本体当前能力是否合理？如果不成立应该新增什么类别？">一致性评估</button>
             </div>
             <div class="status-line" id="statusLine">当前为前端展示页，默认演示已接通的两条查询链路。</div>
           </div>
