@@ -86,6 +86,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inline JSON string/list/object for review_ontology_attribute added_attributes.",
     )
     parser.add_argument(
+        "--target-relation-json",
+        default="",
+        help="Inline JSON object for analyze_relation_necessity target_relation.",
+    )
+    parser.add_argument(
+        "--candidate-relations-json",
+        default="",
+        help="Inline JSON object/list for analyze_relation_necessity candidate_relations.",
+    )
+    parser.add_argument(
         "--base-url",
         help="Gateway base URL, for example http://127.0.0.1:8080.",
     )
@@ -153,6 +163,8 @@ def main() -> None:
             "current_ontology": current_ontology,
             "proposed_ontology": proposed_ontology,
             "added_attributes": json.loads(args.attribute_json) if args.attribute_json else args.attribute,
+            "target_relation": json.loads(args.target_relation_json) if args.target_relation_json else {},
+            "candidate_relations": json.loads(args.candidate_relations_json) if args.candidate_relations_json else [],
         },
         client=client,
     )

@@ -614,6 +614,11 @@
             <div class="tool-schema">{"project_id":"demo","new_ontology":{"name":"C","interactions":[]}}</div>
           </div>
           <div class="tool-card">
+            <div class="tool-name">推导“爷爷关系”必须依赖哪些底层关系？</div>
+            <div class="tool-desc">逐条移除关系图中的底层关系并重新推理，判断哪些关系是必要条件、效率小故或冗余关系。</div>
+            <div class="tool-schema">{"project_id":"demo","target_relation":{"subject":"A","type":"爷爷","target":"C"}}</div>
+          </div>
+          <div class="tool-card">
             <div class="tool-name">学生新增“抓小偷”这个能力是否合理？</div>
             <div class="tool-desc">评估新增属性能否挂到当前本体上，并给出成立条件和建议新增类别。</div>
             <div class="tool-schema">{"project_id":"demo","ontology_name":"学生","added_attributes":["抓小偷"]}</div>
@@ -679,6 +684,7 @@
               <button class="btn" type="button" data-question="学校当前本体内容是什么？">当前内容</button>
               <button class="btn" type="button" data-question="学校 V2 和 V4 差在哪？">版本对比</button>
               <button class="btn" type="button" data-question="demo 项目现在有哪些治理缺口？">治理缺口</button>
+              <button class="btn" type="button" data-question="如果 A 是 B 的父亲，B 是 C 的父亲，那么推导出 A 是 C 的爷爷这件事，必须依赖哪些关系？">关系必要性</button>
               <button class="btn" type="button" data-question="学生新增抓小偷这个能力是否合理？如果成立应该新增什么类别？">属性评估</button>
               <button class="btn" type="button" data-question="学生本体当前能力是否合理？如果不成立应该新增什么类别？">一致性评估</button>
             </div>

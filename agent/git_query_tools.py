@@ -401,6 +401,39 @@ REVIEW_ONTOLOGY_CONSISTENCY_TOOL = ToolDefinition(
     },
 )
 
+ANALYZE_RELATION_NECESSITY_TOOL = ToolDefinition(
+    name="analyze_relation_necessity",
+    description="针对指定推理目标关系，逐条移除关系图中的底层关系并重新推理，判断哪些关系是必要条件、小故、效率小故或冗余关系。",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "project_id": {"type": "string", "description": "项目 ID，例如 demo。"},
+            "new_ontology": {
+                "type": "object",
+                "description": "可选：附加的新本体 JSON。若和库内同名，则用于覆盖当前库内该本体参与推理。",
+            },
+            "filename": {"type": "string", "description": "可选：如果未直接提供 new_ontology，可从当前项目读取该本体文件。"},
+            "ontology_name": {"type": "string", "description": "可选：如果未直接提供 new_ontology，可用本体名解析并读取。"},
+            "target_relation": {
+                "type": "object",
+                "description": "要验证的推理目标关系，例如 {\"subject\":\"A\",\"type\":\"爷爷\",\"target\":\"C\"}。",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "type": {"type": "string"},
+                    "target": {"type": "string"},
+                },
+                "required": ["subject", "type", "target"],
+                "additionalProperties": False,
+            },
+            "candidate_relations": {
+                "description": "可选：限定要测试的底层关系列表。未提供时默认测试关系图中的全部底层关系。",
+            },
+        },
+        "required": ["project_id", "target_relation"],
+        "additionalProperties": False,
+    },
+)
+
 
 def _parse_probability_score(value: Any) -> float | None:
     if value is None:
@@ -1607,6 +1640,232 @@ def _inferred_properties_for_new_ontology(
     return properties
 
 
+def _relation_key(subject: Any, relation_type: Any, target: Any) -> tuple[str, str, str]:
+    return (
+        _normalize_logic_value(subject),
+        _normalize_logic_value(relation_type),
+        _normalize_logic_value(target),
+    )
+
+
+def _relation_display(subject: Any, relation_type: Any, target: Any) -> dict[str, str]:
+    return {
+        "subject": _as_text(subject),
+        "type": _as_text(relation_type),
+        "target": _as_text(target),
+    }
+
+
+def _clone_relation_list(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(item) for item in items if isinstance(item, dict)]
+
+
+def _coerce_relation_object(value: Any, label: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object with subject/type/target")
+    subject = _as_text(value.get("subject"))
+    relation_type = _as_text(value.get("type"))
+    target = _as_text(value.get("target"))
+    if not subject or not relation_type or not target:
+        raise ValueError(f"{label} must include non-empty subject, type and target")
+    return {
+        "subject": subject,
+        "type": relation_type,
+        "target": target,
+    }
+
+
+def _coerce_candidate_relations(value: Any) -> list[dict[str, str]]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, dict):
+        return [_coerce_relation_object(value, "candidate_relations")]
+    if isinstance(value, list):
+        return [_coerce_relation_object(item, "candidate_relations item") for item in value]
+    raise ValueError("candidate_relations must be an object or a list of objects")
+
+
+def _relation_path_length(relation: dict[str, Any]) -> int:
+    evidence = relation.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        return max(1, len(evidence))
+    return 1
+
+
+def _find_relation_occurrences(relations: list[dict[str, Any]], relation_key: tuple[str, str, str]) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for relation in relations:
+        if _relation_key(relation.get("subject"), relation.get("type"), relation.get("target")) == relation_key:
+            matches.append(relation)
+    return matches
+
+
+def _best_relation_match(relations: list[dict[str, Any]], relation_key: tuple[str, str, str]) -> dict[str, Any] | None:
+    matches = _find_relation_occurrences(relations, relation_key)
+    if not matches:
+        return None
+    return min(matches, key=_relation_path_length)
+
+
+def _build_inference_snapshot(
+    project_id: str,
+    payload: dict[str, Any] | None,
+    filename: str | None,
+    ontology_name: str | None,
+    client: GatewayClient,
+    base_triples_override: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_project_id = str(project_id).strip()
+    resolution: dict[str, Any] = {"mode": "project"}
+    current_payload = payload
+
+    if base_triples_override is None:
+        if not current_payload:
+            if _as_text(filename) or _as_text(ontology_name):
+                try:
+                    resolved_filename, resolution = resolve_ontology_filename(
+                        project_id=normalized_project_id,
+                        filename=filename,
+                        ontology_name=ontology_name,
+                        client=client,
+                    )
+                    content = get_version_content(
+                        project_id=normalized_project_id,
+                        filename=resolved_filename,
+                        client=client,
+                    )
+                    current_payload = content["content"]
+                except Exception as exc:
+                    fallback_name = _as_text(ontology_name)
+                    if not fallback_name:
+                        raise
+                    current_payload = {"name": fallback_name, "interactions": []}
+                    resolution = {
+                        "mode": "new_ontology_name_fallback",
+                        "input": fallback_name,
+                        "detail": "ontology was not found in the current project; using the supplied ontology_name as a new ontology payload",
+                        "resolve_error": str(exc),
+                    }
+        else:
+            resolution = {"mode": "inline_new_ontology"}
+
+        new_ontology_name = _ontology_display_name(current_payload) if current_payload else ""
+        current_ontologies = _read_project_current_ontologies(normalized_project_id, client)
+        normalized_new_name = _normalize_logic_value(new_ontology_name)
+        merged_ontologies: list[dict[str, Any]] = []
+        replaced_existing = False
+        read_errors: list[dict[str, str]] = []
+
+        for item in current_ontologies:
+            data = item.get("data")
+            filename_value = _as_text(item.get("filename"))
+            read_error = _as_text(item.get("read_error"))
+            if read_error:
+                read_errors.append({"filename": filename_value, "error": read_error})
+                continue
+            if not isinstance(data, dict):
+                continue
+            if normalized_new_name and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name:
+                merged_ontologies.append({"filename": filename_value or "__new_ontology__", "data": current_payload})
+                replaced_existing = True
+            else:
+                merged_ontologies.append({"filename": filename_value, "data": data})
+
+        if current_payload and not replaced_existing:
+            merged_ontologies.append({"filename": "__new_ontology__", "data": current_payload})
+
+        triples: list[dict[str, Any]] = []
+        ontology_summaries: list[dict[str, Any]] = []
+        for item in merged_ontologies:
+            data = item.get("data") if isinstance(item, dict) else {}
+            filename_value = _as_text(item.get("filename")) if isinstance(item, dict) else ""
+            if not isinstance(data, dict):
+                continue
+            ontology_triples = _extract_relation_triples(data, filename_value)
+            triples.extend(ontology_triples)
+            ontology_summaries.append({
+                "filename": filename_value,
+                "name": _ontology_display_name(data, filename_value),
+                "relation_count": len(ontology_triples),
+                "is_input_ontology": bool(normalized_new_name) and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name,
+            })
+    else:
+        new_ontology_name = _ontology_display_name(current_payload) if current_payload else ""
+        triples = _clone_relation_list(base_triples_override)
+        replaced_existing = False
+        read_errors = []
+        resolution = {"mode": "recomputed_without_relation"}
+        ontology_summaries = []
+
+    inferred_relations = _infer_family_relations(triples)
+    inferred_relations.extend(_infer_property_transfer_relations(triples))
+    inverse_inferred_relations = [
+        {
+            "subject": item["subject"],
+            "type": "父母",
+            "target": item["target"],
+            "rule_id": "inverse_child_parent",
+            "rule": (
+                f"{item['derived_from_inverse']['subject']} 是 "
+                f"{item['derived_from_inverse']['target']} 的{item['derived_from_inverse']['type']}，"
+                f"因此 {item['subject']} 是 {item['target']} 的父母"
+            ),
+            "evidence": [item["derived_from_inverse"]],
+        }
+        for item in triples
+        if isinstance(item, dict) and isinstance(item.get("derived_from_inverse"), dict)
+    ]
+    inferred_relations = inverse_inferred_relations + inferred_relations
+    logic_issues = _find_logic_issues(triples, inferred_relations)
+    inferred_properties = _inferred_properties_for_new_ontology(
+        inferred_relations=inferred_relations,
+        new_ontology_name=new_ontology_name,
+    )
+    return {
+        "project_id": normalized_project_id,
+        "target_resolution": resolution,
+        "new_ontology_name": new_ontology_name,
+        "input_replaced_existing_ontology": replaced_existing,
+        "summary": {
+            "ontology_count": len(ontology_summaries),
+            "base_relation_count": len(triples),
+            "inferred_relation_count": len(inferred_relations),
+            "inferred_property_count_for_new_ontology": len(inferred_properties),
+            "logic_issue_count": len(logic_issues),
+            "high_logic_issue_count": len([item for item in logic_issues if item.get("severity") == "high"]),
+            "read_error_count": len(read_errors),
+        },
+        "inferred_properties": inferred_properties,
+        "inferred_relations": inferred_relations,
+        "logic_issues": logic_issues,
+        "supported_rules": [
+            "父亲 + 父亲 => 爷爷",
+            "父亲 + 母亲 => 外公",
+            "母亲 + 父亲 => 奶奶",
+            "母亲 + 母亲 => 外婆",
+            "自指关系 => 逻辑问题",
+            "方向性关系双向互指 => 逻辑问题",
+            "颜色/味道/状态多个取值 => 逻辑问题",
+            "原料属性推导与成品显式属性冲突 => 逻辑问题",
+            "导致/造成/引起 + 导致/造成/引起 => 间接导致",
+            "影响/作用于 + 影响/作用于 => 间接影响",
+            "依赖/需要 + 依赖/需要 => 间接依赖",
+            "包含/包括/下辖 + 包含/包括/下辖 => 包含",
+            "属于/隶属于 + 属于/隶属于 => 属于",
+            "管理/管辖/负责 + 管理/管辖/负责 => 间接管理",
+            "父类/上位概念 + 父类/上位概念 => 上级",
+            "子类/下位概念 + 子类/下位概念 => 子类",
+            "位于/在 + 位于/在 => 位于",
+            "早于/先于 + 早于/先于 => 早于",
+            "晚于/后于 + 晚于/后于 => 晚于",
+            "原料属性 + 制成/由制成关系 => 成品继承该属性",
+        ],
+        "base_relations": triples,
+        "ontologies": ontology_summaries,
+        "read_errors": read_errors,
+    }
+
+
 def get_community_top_version(
     project_id: str,
     filename: str | None = None,
@@ -2180,150 +2439,167 @@ def infer_causal_logic(
     gateway_client = client or GatewayClient()
     normalized_project_id = str(project_id).strip()
     payload = _coerce_ontology_payload(new_ontology)
-
-    resolution: dict[str, Any] = {"mode": "project"}
-    if not payload:
-        if _as_text(filename) or _as_text(ontology_name):
-            try:
-                resolved_filename, resolution = resolve_ontology_filename(
-                    project_id=normalized_project_id,
-                    filename=filename,
-                    ontology_name=ontology_name,
-                    client=gateway_client,
-                )
-                content = get_version_content(
-                    project_id=normalized_project_id,
-                    filename=resolved_filename,
-                    client=gateway_client,
-                )
-                payload = content["content"]
-            except Exception as exc:
-                fallback_name = _as_text(ontology_name)
-                if not fallback_name:
-                    raise
-                payload = {
-                    "name": fallback_name,
-                    "interactions": [],
-                }
-                resolution = {
-                    "mode": "new_ontology_name_fallback",
-                    "input": fallback_name,
-                    "detail": "ontology was not found in the current project; using the supplied ontology_name as a new ontology payload",
-                    "resolve_error": str(exc),
-                }
-    else:
-        resolution = {"mode": "inline_new_ontology"}
-
-    new_ontology_name = _ontology_display_name(payload) if payload else ""
-
-    current_ontologies = _read_project_current_ontologies(normalized_project_id, gateway_client)
-    normalized_new_name = _normalize_logic_value(new_ontology_name)
-    merged_ontologies: list[dict[str, Any]] = []
-    replaced_existing = False
-    read_errors: list[dict[str, str]] = []
-
-    for item in current_ontologies:
-        data = item.get("data")
-        filename_value = _as_text(item.get("filename"))
-        read_error = _as_text(item.get("read_error"))
-        if read_error:
-            read_errors.append({"filename": filename_value, "error": read_error})
-            continue
-        if not isinstance(data, dict):
-            continue
-        if normalized_new_name and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name:
-            merged_ontologies.append({"filename": filename_value or "__new_ontology__", "data": payload})
-            replaced_existing = True
-        else:
-            merged_ontologies.append({"filename": filename_value, "data": data})
-
-    if payload and not replaced_existing:
-        merged_ontologies.append({"filename": "__new_ontology__", "data": payload})
-
-    triples: list[dict[str, Any]] = []
-    ontology_summaries: list[dict[str, Any]] = []
-    for item in merged_ontologies:
-        data = item.get("data") if isinstance(item, dict) else {}
-        filename_value = _as_text(item.get("filename")) if isinstance(item, dict) else ""
-        if not isinstance(data, dict):
-            continue
-        ontology_triples = _extract_relation_triples(data, filename_value)
-        triples.extend(ontology_triples)
-        ontology_summaries.append({
-            "filename": filename_value,
-            "name": _ontology_display_name(data, filename_value),
-            "relation_count": len(ontology_triples),
-            "is_input_ontology": bool(normalized_new_name) and _normalize_logic_value(_ontology_display_name(data, filename_value)) == normalized_new_name,
-        })
-
-    inferred_relations = _infer_family_relations(triples)
-    inferred_relations.extend(_infer_property_transfer_relations(triples))
-    inverse_inferred_relations = [
-        {
-            "subject": item["subject"],
-            "type": "父母",
-            "target": item["target"],
-            "rule_id": "inverse_child_parent",
-            "rule": (
-                f"{item['derived_from_inverse']['subject']} 是 "
-                f"{item['derived_from_inverse']['target']} 的{item['derived_from_inverse']['type']}，"
-                f"因此 {item['subject']} 是 {item['target']} 的父母"
-            ),
-            "evidence": [item["derived_from_inverse"]],
-        }
-        for item in triples
-        if isinstance(item, dict) and isinstance(item.get("derived_from_inverse"), dict)
-    ]
-    inferred_relations = inverse_inferred_relations + inferred_relations
-    logic_issues = _find_logic_issues(triples, inferred_relations)
-    inferred_properties = _inferred_properties_for_new_ontology(
-        inferred_relations=inferred_relations,
-        new_ontology_name=new_ontology_name,
+    snapshot = _build_inference_snapshot(
+        project_id=normalized_project_id,
+        payload=payload,
+        filename=filename,
+        ontology_name=ontology_name,
+        client=gateway_client,
     )
-
     return {
         "tool_name": INFER_CAUSAL_LOGIC_TOOL.name,
-        "project_id": normalized_project_id,
-        "target_resolution": resolution,
-        "new_ontology_name": new_ontology_name,
-        "input_replaced_existing_ontology": replaced_existing,
-        "summary": {
-            "ontology_count": len(ontology_summaries),
-            "base_relation_count": len(triples),
-            "inferred_relation_count": len(inferred_relations),
-            "inferred_property_count_for_new_ontology": len(inferred_properties),
-            "logic_issue_count": len(logic_issues),
-            "high_logic_issue_count": len([item for item in logic_issues if item.get("severity") == "high"]),
-            "read_error_count": len(read_errors),
+        **snapshot,
+    }
+
+
+def analyze_relation_necessity(
+    project_id: str,
+    target_relation: dict[str, Any],
+    new_ontology: dict[str, Any] | str | None = None,
+    filename: str | None = None,
+    ontology_name: str | None = None,
+    candidate_relations: Any = None,
+    client: GatewayClient | None = None,
+) -> dict[str, Any]:
+    if not str(project_id).strip():
+        raise ValueError("project_id is required")
+
+    gateway_client = client or GatewayClient()
+    payload = _coerce_ontology_payload(new_ontology)
+    baseline = _build_inference_snapshot(
+        project_id=str(project_id).strip(),
+        payload=payload,
+        filename=filename,
+        ontology_name=ontology_name,
+        client=gateway_client,
+    )
+    normalized_target = _coerce_relation_object(target_relation, "target_relation")
+    target_key = _relation_key(
+        normalized_target["subject"],
+        normalized_target["type"],
+        normalized_target["target"],
+    )
+
+    baseline_relations = _clone_relation_list(baseline["base_relations"]) + _clone_relation_list(baseline["inferred_relations"])
+    baseline_match = _best_relation_match(baseline_relations, target_key)
+    if baseline_match is None:
+        return {
+            "tool_name": ANALYZE_RELATION_NECESSITY_TOOL.name,
+            "project_id": str(project_id).strip(),
+            "target_relation": normalized_target,
+            "status": "target_not_derivable",
+            "detail": "the target relation is not currently derivable from the relation graph",
+            "baseline": {
+                "base_relation_count": baseline["summary"]["base_relation_count"],
+                "inferred_relation_count": baseline["summary"]["inferred_relation_count"],
+                "logic_issue_count": baseline["summary"]["logic_issue_count"],
+            },
+            "analysis": [],
+            "necessary_relations": [],
+            "efficiency_necessary_relations": [],
+            "redundant_relations": [],
+        }
+
+    baseline_length = _relation_path_length(baseline_match)
+    base_triples = _clone_relation_list(baseline["base_relations"])
+    requested_candidates = _coerce_candidate_relations(candidate_relations)
+    requested_keys = {
+        _relation_key(item["subject"], item["type"], item["target"])
+        for item in requested_candidates
+    }
+
+    analyses: list[dict[str, Any]] = []
+    necessary_relations: list[dict[str, Any]] = []
+    efficiency_necessary_relations: list[dict[str, Any]] = []
+    redundant_relations: list[dict[str, Any]] = []
+
+    for index, relation in enumerate(base_triples):
+        relation_obj = _relation_display(relation.get("subject"), relation.get("type"), relation.get("target"))
+        relation_key = _relation_key(
+            relation_obj["subject"],
+            relation_obj["type"],
+            relation_obj["target"],
+        )
+        if requested_keys and relation_key not in requested_keys:
+            continue
+
+        pruned_triples = [
+            dict(item)
+            for offset, item in enumerate(base_triples)
+            if offset != index
+        ]
+        recomputed = _build_inference_snapshot(
+            project_id=str(project_id).strip(),
+            payload=payload,
+            filename=filename,
+            ontology_name=ontology_name,
+            client=gateway_client,
+            base_triples_override=pruned_triples,
+        )
+        recomputed_relations = _clone_relation_list(recomputed["base_relations"]) + _clone_relation_list(recomputed["inferred_relations"])
+        recomputed_match = _best_relation_match(recomputed_relations, target_key)
+
+        if recomputed_match is None:
+            status = "necessary_small_cause"
+            detail = "removing this relation makes the target relation no longer derivable"
+            necessary_relations.append(relation_obj)
+            after_length = None
+        else:
+            after_length = _relation_path_length(recomputed_match)
+            if after_length > baseline_length:
+                status = "efficiency_small_cause"
+                detail = "removing this relation keeps the target derivable but increases the derivation path length"
+                efficiency_necessary_relations.append(relation_obj)
+            else:
+                status = "redundant_for_target"
+                detail = "removing this relation does not change derivability or shortest path length for the target"
+                redundant_relations.append(relation_obj)
+
+        analyses.append({
+            "tested_relation": relation_obj,
+            "status": status,
+            "detail": detail,
+            "baseline_path_length": baseline_length,
+            "after_path_length": after_length,
+            "target_still_derivable": recomputed_match is not None,
+            "after_logic_issue_count": recomputed["summary"]["logic_issue_count"],
+        })
+
+    analyses.sort(key=lambda item: (
+        {"necessary_small_cause": 0, "efficiency_small_cause": 1, "redundant_for_target": 2}.get(str(item.get("status")), 9),
+        item["tested_relation"]["subject"],
+        item["tested_relation"]["type"],
+        item["tested_relation"]["target"],
+    ))
+
+    return {
+        "tool_name": ANALYZE_RELATION_NECESSITY_TOOL.name,
+        "project_id": str(project_id).strip(),
+        "target_relation": normalized_target,
+        "status": "success",
+        "target_resolution": baseline["target_resolution"],
+        "baseline": {
+            "base_relation_count": baseline["summary"]["base_relation_count"],
+            "inferred_relation_count": baseline["summary"]["inferred_relation_count"],
+            "logic_issue_count": baseline["summary"]["logic_issue_count"],
+            "target_path_length": baseline_length,
+            "target_match": _relation_display(
+                baseline_match.get("subject"),
+                baseline_match.get("type"),
+                baseline_match.get("target"),
+            ),
         },
-        "inferred_properties": inferred_properties,
-        "inferred_relations": inferred_relations,
-        "logic_issues": logic_issues,
-        "supported_rules": [
-            "父亲 + 父亲 => 爷爷",
-            "父亲 + 母亲 => 外公",
-            "母亲 + 父亲 => 奶奶",
-            "母亲 + 母亲 => 外婆",
-            "自指关系 => 逻辑问题",
-            "方向性关系双向互指 => 逻辑问题",
-            "颜色/味道/状态多个取值 => 逻辑问题",
-            "原料属性推导与成品显式属性冲突 => 逻辑问题",
-            "导致/造成/引起 + 导致/造成/引起 => 间接导致",
-            "影响/作用于 + 影响/作用于 => 间接影响",
-            "依赖/需要 + 依赖/需要 => 间接依赖",
-            "包含/包括/下辖 + 包含/包括/下辖 => 包含",
-            "属于/隶属于 + 属于/隶属于 => 属于",
-            "管理/管辖/负责 + 管理/管辖/负责 => 间接管理",
-            "父类/上位概念 + 父类/上位概念 => 上级",
-            "子类/下位概念 + 子类/下位概念 => 子类",
-            "位于/在 + 位于/在 => 位于",
-            "早于/先于 + 早于/先于 => 早于",
-            "晚于/后于 + 晚于/后于 => 晚于",
-            "原料属性 + 制成/由制成关系 => 成品继承该属性",
-        ],
-        "base_relations": triples,
-        "ontologies": ontology_summaries,
-        "read_errors": read_errors,
+        "summary": {
+            "tested_relation_count": len(analyses),
+            "necessary_small_cause_count": len(necessary_relations),
+            "efficiency_small_cause_count": len(efficiency_necessary_relations),
+            "redundant_relation_count": len(redundant_relations),
+        },
+        "analysis": analyses,
+        "necessary_relations": necessary_relations,
+        "efficiency_necessary_relations": efficiency_necessary_relations,
+        "redundant_relations": redundant_relations,
+        "minimal_support_edge_set": necessary_relations,
     }
 
 
@@ -2336,6 +2612,7 @@ def get_available_tools() -> list[ToolDefinition]:
         COMPARE_VERSIONS_TOOL,
         FIND_GOVERNANCE_GAPS_TOOL,
         INFER_CAUSAL_LOGIC_TOOL,
+        ANALYZE_RELATION_NECESSITY_TOOL,
         REVIEW_ONTOLOGY_ATTRIBUTE_TOOL,
         REVIEW_ONTOLOGY_CONSISTENCY_TOOL,
     ]
@@ -2395,6 +2672,16 @@ def run_tool(name: str, arguments: dict[str, Any], client: GatewayClient | None 
             new_ontology=arguments.get("new_ontology"),
             filename=str(arguments.get("filename", "") or ""),
             ontology_name=str(arguments.get("ontology_name", "") or ""),
+            client=client,
+        )
+    if name == ANALYZE_RELATION_NECESSITY_TOOL.name:
+        return analyze_relation_necessity(
+            project_id=str(arguments.get("project_id", "")),
+            target_relation=arguments.get("target_relation") or {},
+            new_ontology=arguments.get("new_ontology"),
+            filename=str(arguments.get("filename", "") or ""),
+            ontology_name=str(arguments.get("ontology_name", "") or ""),
+            candidate_relations=arguments.get("candidate_relations"),
             client=client,
         )
     if name == REVIEW_ONTOLOGY_ATTRIBUTE_TOOL.name:

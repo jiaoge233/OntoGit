@@ -586,3 +586,41 @@ python .\run_git_tool.py review_ontology_consistency `
   --base-url http://127.0.0.1:8080 `
   --api-key local-gateway-key
 ```
+
+## 2026-04-29 关系必要性分析 Tool
+
+新增 `analyze_relation_necessity`，用于围绕一个推理目标关系做“反向验证”。工具会逐条移除关系图中的底层关系并重新运行当前推理规则，从而判断：
+
+- 哪些关系一旦移除，目标关系就无法再推导：`necessary_small_cause`
+- 哪些关系移除后仍可推导，但推导路径变长：`efficiency_small_cause`
+- 哪些关系移除后目标关系和最短推导路径都不变：`redundant_for_target`
+
+典型输入：
+
+```json
+{
+  "project_id": "demo",
+  "target_relation": {
+    "subject": "A",
+    "type": "爷爷",
+    "target": "C"
+  }
+}
+```
+
+如果项目中已有：
+
+- `A 父亲 B`
+- `B 父亲 C`
+
+那么工具会围绕 `A 爷爷 C` 逐条测试底层关系，并返回“哪条关系是必要小故”。
+
+PowerShell 直调示例：
+
+```powershell
+python .\run_git_tool.py analyze_relation_necessity `
+  --project-id demo `
+  --target-relation-json '{"subject":"A","type":"爷爷","target":"C"}' `
+  --base-url http://127.0.0.1:8080 `
+  --api-key local-gateway-key
+```
